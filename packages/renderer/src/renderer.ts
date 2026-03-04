@@ -1,5 +1,5 @@
 import { createElement, type ReactElement } from 'react';
-import { createComponentRegistry, type ComponentRegistry } from './registry';
+import { componentRegistry, createComponentRegistry, type ComponentRegistry } from './registry';
 import type { ComponentSchema } from './types/component-schema';
 import type { RendererSchema } from './types/renderer-schema';
 import { renderEntity } from './renderers/entity-renderer';
@@ -37,9 +37,9 @@ const renderComponentNode = (
   }
 
   const mappedType = component.component ?? component.type;
-  const mappedComponent = registry.get(mappedType);
+  const Component = registry.get(mappedType) ?? componentRegistry[mappedType];
 
-  if (!mappedComponent) {
+  if (!Component) {
     throw new Error(`Missing registry component for schema type \"${mappedType}\".`);
   }
 
@@ -47,7 +47,7 @@ const renderComponentNode = (
     renderComponentNode(child, context, registry),
   );
 
-  return createElement(mappedComponent, {
+  return createElement(Component, {
     key: component.id,
     schemaId: component.id,
     tokenScope: component.type,
@@ -70,9 +70,15 @@ export const renderSchema = (
     renderComponentNode(component, context, registry),
   );
 
-  return createElement('div', {
-    'data-renderer-root': validated.id,
-    'data-schema-type': validated.type,
+  const RootComponent = registry.get('stack') ?? componentRegistry.stack;
+
+  if (!RootComponent) {
+    throw new Error('Missing registry component for renderer root "stack".');
+  }
+
+  return createElement(RootComponent, {
+    schemaId: validated.id,
+    tokenScope: validated.type,
     children: [renderedLayout, ...renderedComponents],
   });
 };
