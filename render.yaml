@@ -1,8 +1,9 @@
 services:
+
   - type: web
     name: billing-backend
     runtime: docker
-    rootDir: /
+    autoDeploy: true
     dockerfilePath: infrastructure/docker/Dockerfile.backend
     envVars:
       - key: DATABASE_URL
@@ -18,13 +19,14 @@ services:
   - type: web
     name: billing-frontend
     runtime: docker
+    autoDeploy: true
     dockerfilePath: infrastructure/docker/Dockerfile.frontend
     envVars:
       - key: NEXT_PUBLIC_API_URL
         fromService:
           type: web
           name: billing-backend
-          property: host
+          property: url
 
 databases:
   - name: billing-db
