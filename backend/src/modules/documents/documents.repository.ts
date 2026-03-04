@@ -21,20 +21,22 @@ export class DocumentsRepository {
     return document;
   }
 
-  findByInvoiceAndType(tenantId: string, invoiceId: string, type: DocumentType): DocumentEntity | undefined {
+  findBySourceAndType(tenantId: string, sourceEntityId: string, type: DocumentType): DocumentEntity | undefined {
     return [...this.documents.values()].find(
       (document) =>
         document.tenant_id === tenantId &&
-        document.invoice_id === invoiceId &&
+        document.source_entity_id === sourceEntityId &&
         document.document_type === type
     );
   }
 
-  create(data: Omit<DocumentEntity, 'id' | 'created_at'>): DocumentEntity {
+  create(data: Omit<DocumentEntity, 'id' | 'created_at' | 'updated_at'>): DocumentEntity {
+    const now = new Date().toISOString();
     const created: DocumentEntity = {
       ...data,
       id: randomUUID(),
-      created_at: new Date().toISOString()
+      created_at: now,
+      updated_at: now
     };
 
     this.documents.set(created.id, created);

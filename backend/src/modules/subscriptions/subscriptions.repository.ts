@@ -61,6 +61,7 @@ export class SubscriptionsRepository {
 
     return [...this.subscriptions.values()]
       .filter((subscription) => subscription.status === 'active')
+      .filter((subscription) => subscription.next_billing_date !== null)
       .filter((subscription) => new Date(subscription.next_billing_date).getTime() <= asOfMs)
       .filter((subscription) => new Date(subscription.start_date).getTime() <= asOfMs)
       .filter((subscription) => {

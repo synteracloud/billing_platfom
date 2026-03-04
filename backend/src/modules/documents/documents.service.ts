@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CustomersService } from '../customers/customers.service';
+import { EventsService } from '../events/events.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { TenantsService } from '../tenants/service';
 import { SendInvoiceDto } from './dto/send-invoice.dto';
@@ -15,6 +16,7 @@ export class DocumentsService {
     private readonly invoicesService: InvoicesService,
     private readonly customersService: CustomersService,
     private readonly tenantsService: TenantsService,
+    private readonly eventsService: EventsService,
     private readonly pdfService: PdfService,
     private readonly emailService: EmailService
   ) {}
@@ -37,11 +39,23 @@ export class DocumentsService {
     const customer = this.customersService.getCustomer(tenantId, invoice.customer_id);
     const tenant = this.tenantsService.getTenant(tenantId);
 
-    return this.pdfService.generateInvoicePdf(tenantId, {
+    const document = await this.pdfService.generateInvoicePdf(tenantId, {
       tenant,
       customer,
       invoice
     });
+
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'document_generated',
+      event_category: 'financial',
+      entity_type: 'document',
+      entity_id: document.id,
+      actor_type: 'system',
+      payload: { source_entity_id: invoiceId }
+    });
+
+    return document;
   }
 
   async sendInvoice(tenantId: string, invoiceId: string, data: SendInvoiceDto): Promise<{
@@ -64,7 +78,7 @@ export class DocumentsService {
 
     const document = await this.getInvoicePdf(tenantId, invoiceId);
 
-    return this.emailService.sendInvoiceEmail({
+    const response = await this.emailService.sendInvoiceEmail({
       invoiceId: invoice.id,
       customerEmail: targetEmail,
       invoiceNumber: invoice.invoice_number,
@@ -72,6 +86,18 @@ export class DocumentsService {
       currency: invoice.currency,
       document
     });
+
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'document_sent',
+      event_category: 'financial',
+      entity_type: 'invoice',
+      entity_id: invoiceId,
+      actor_type: 'system',
+      payload: { to: targetEmail }
+    });
+
+    return response;
   }
 
   private validateEmail(email: string): void {

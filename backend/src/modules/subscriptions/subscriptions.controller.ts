@@ -86,30 +86,6 @@ export class SubscriptionsController {
     };
   }
 
-  @Post(':id/pause')
-  pauseSubscription(
-    @Req() req: AuthenticatedRequest,
-    @Param('id') id: string
-  ): SuccessResponse<ReturnType<SubscriptionsService['pauseSubscription']>> {
-    return {
-      data: this.subscriptionsService.pauseSubscription(req.auth!.tenant_id, id),
-      meta: { request_id: this.getRequestId() },
-      error: null
-    };
-  }
-
-  @Post(':id/resume')
-  resumeSubscription(
-    @Req() req: AuthenticatedRequest,
-    @Param('id') id: string
-  ): SuccessResponse<ReturnType<SubscriptionsService['resumeSubscription']>> {
-    return {
-      data: this.subscriptionsService.resumeSubscription(req.auth!.tenant_id, id),
-      meta: { request_id: this.getRequestId() },
-      error: null
-    };
-  }
-
   private getRequestId(): string {
     return randomUUID();
   }
