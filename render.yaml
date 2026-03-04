@@ -23,10 +23,7 @@ services:
     dockerfilePath: infrastructure/docker/Dockerfile.frontend
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          type: web
-          name: billing-backend
-          property: url
+        value: https://billing-backend.onrender.com
 
 databases:
   - name: billing-db
