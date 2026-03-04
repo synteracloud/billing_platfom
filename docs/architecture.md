@@ -61,6 +61,36 @@ Directory intent:
 - Server/client boundaries that preserve consistent computed outcomes.
 - API contract-first integration using typed clients from shared packages.
 
+### Frontend architecture layers
+Layer 1 — Design Tokens
+- Defines colors, spacing, typography.
+
+Layer 2 — Component System
+- Reusable UI components.
+
+Layer 3 — Wireframes
+- Define structural layout of application screens.
+- Examples:
+  - dashboard
+  - customers
+  - products
+  - invoices
+  - payments
+- Wireframes describe layout and data regions but not styling.
+
+Layer 4 — Renderer
+- Schema-driven engine that converts wireframes into UI components.
+
+Layer 5 — Application Pages
+- Next.js pages that bind APIs to renderer schemas.
+
+Flow:
+- API data
+  → renderer schema
+  → components
+  → tokens
+  → UI
+
 ## 5. Domain Modules
 - **tenants**
   - Tenant lifecycle, plan metadata, regional settings, feature entitlements.
