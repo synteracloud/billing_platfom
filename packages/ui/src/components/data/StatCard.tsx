@@ -1,13 +1,11 @@
-import { tokens } from '../../tokens/tokens';
-
 interface StatCardProps {
   label: string;
   value: string;
 }
 
 export const StatCard = ({ label, value }: StatCardProps) => (
-  <article style={{ backgroundColor: tokens.color.surface, border: `${tokens.border.width.thin} solid ${tokens.color.borderSubtle}`, borderRadius: tokens.radius.md, padding: tokens.spacing.lg }}>
-    <div style={{ color: tokens.color.textSecondary, fontSize: tokens.typography.fontSize.sm }}>{label}</div>
-    <div style={{ color: tokens.color.textPrimary, fontSize: tokens.typography.fontSize.xl, fontWeight: tokens.typography.fontWeight.semibold }}>{value}</div>
+  <article style={{ backgroundColor: 'var(--color-surface)', border: 'var(--border-width-thin) solid var(--color-border-subtle)', borderRadius: 'var(--radius-md)', padding: 'var(--space-lg)' }}>
+    <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--typography-font-size-sm)' }}>{label}</div>
+    <div style={{ color: 'var(--color-text-primary)', fontSize: 'var(--typography-font-size-xl)', fontWeight: 'var(--typography-font-weight-semibold)' }}>{value}</div>
   </article>
 );
