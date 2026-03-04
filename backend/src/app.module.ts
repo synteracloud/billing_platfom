@@ -2,6 +2,7 @@ import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/c
 import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
 import { CustomersModule } from './modules/customers/customers.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { EventsModule } from './modules/events/events.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
@@ -16,6 +17,7 @@ import { UsersModule } from './modules/users/module';
     TenantsModule,
     UsersModule,
     CustomersModule,
+    DashboardModule,
     ProductsModule,
     InvoicesModule,
     PaymentsModule,
@@ -32,6 +34,8 @@ export class AppModule implements NestModule {
       { path: 'api/v1/users/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/customers', method: RequestMethod.ALL },
       { path: 'api/v1/customers/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/dashboard', method: RequestMethod.ALL },
+      { path: 'api/v1/dashboard/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/products', method: RequestMethod.ALL },
       { path: 'api/v1/products/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/invoices', method: RequestMethod.ALL },

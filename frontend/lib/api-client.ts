@@ -41,7 +41,12 @@ export const apiRequest = async <T>(path: string, options: RequestOptions = {}):
     throw new Error(`API request failed (${response.status}): ${response.statusText}`);
   }
 
-  return response.json() as Promise<T>;
+  const payload = (await response.json()) as { data?: T } | T;
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    return (payload as { data: T }).data;
+  }
+
+  return payload as T;
 };
 
 export const apiClient = {

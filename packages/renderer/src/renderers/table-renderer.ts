@@ -11,6 +11,10 @@ interface TableColumnDefinition {
   filterable?: boolean;
 }
 
+interface TableRow {
+  [key: string]: string | number | null;
+}
+
 export const renderTable = (
   schema: ComponentSchema,
   context: RendererContext,
@@ -22,9 +26,17 @@ export const renderTable = (
     throw new Error('No registered table component found.');
   }
 
-  const columns = (schema.props?.columns as TableColumnDefinition[] | undefined) ?? [];
-  const rowsBinding = String(schema.props?.rowsBinding ?? '');
-  const rows = rowsBinding ? context.resolveBinding(rowsBinding) : [];
+  const resolvedBinding = String(schema.props?.rowsBinding ?? schema.props?.binding ?? '');
+  const rows = (resolvedBinding ? context.resolveBinding(resolvedBinding) : []) as TableRow[];
+
+  const configuredColumns = (schema.props?.columns as Array<TableColumnDefinition | string> | undefined) ?? [];
+  const columns = configuredColumns.length
+    ? configuredColumns.map((column) =>
+        typeof column === 'string' ? column : (column.header ?? column.accessor ?? column.id),
+      )
+    : rows.length > 0
+      ? Object.keys(rows[0])
+      : [];
 
   return createElement(tableComponent as RenderComponent, {
     key: schema.id,
