@@ -2,17 +2,25 @@ import { customersSchema } from '@billing-platform/renderer/schemas/customers.sc
 import { apiClient } from '@/lib/api-client';
 import { renderSchema } from '@/lib/renderer-provider';
 
-const fetchCustomersData = async (): Promise<Record<string, unknown>> => {
+const fallbackCustomersData: Record<string, unknown> = {
+  customers: {
+    list: [],
+    filters: {},
+    editor: {},
+  },
+};
+
+const fetchCustomers = async (): Promise<Record<string, unknown>> => {
   try {
     return await apiClient.get<Record<string, unknown>>('/customers');
   } catch {
-    return { customers: { list: [], filters: {}, editor: {} } };
+    return fallbackCustomersData;
   }
 };
 
 export default async function CustomersPage() {
   const schema = customersSchema;
-  const data = await fetchCustomersData();
+  const data = await fetchCustomers();
 
   return renderSchema(schema, data);
 }
