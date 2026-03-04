@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: billing-backend
+    runtime: docker
+    rootDir: /
+    dockerfilePath: infrastructure/docker/Dockerfile.backend
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: billing-db
+          property: connectionString
+      - key: PORT
+        value: "4000"
+      - key: NODE_ENV
+        value: production
+    healthCheckPath: /health
+
+  - type: web
+    name: billing-frontend
+    runtime: docker
+    dockerfilePath: infrastructure/docker/Dockerfile.frontend
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: billing-backend
+          property: host
+
+databases:
+  - name: billing-db
+    databaseName: billing
+    user: billing
