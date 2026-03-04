@@ -2,17 +2,25 @@ import { productsSchema } from '@billing-platform/renderer/schemas/products.sche
 import { apiClient } from '@/lib/api-client';
 import { renderSchema } from '@/lib/renderer-provider';
 
-const fetchProductsData = async (): Promise<Record<string, unknown>> => {
+const fallbackProductsData: Record<string, unknown> = {
+  products: {
+    list: [],
+    filters: {},
+    editor: {},
+  },
+};
+
+const fetchProducts = async (): Promise<Record<string, unknown>> => {
   try {
     return await apiClient.get<Record<string, unknown>>('/products');
   } catch {
-    return { products: { list: [], filters: {}, editor: {} } };
+    return fallbackProductsData;
   }
 };
 
 export default async function ProductsPage() {
   const schema = productsSchema;
-  const data = await fetchProductsData();
+  const data = await fetchProducts();
 
   return renderSchema(schema, data);
 }
