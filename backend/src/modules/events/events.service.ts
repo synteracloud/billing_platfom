@@ -1,15 +1,19 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { QueryEventsDto } from './dto/query-events.dto';
-import { EventEntity, EventType } from './entities/event.entity';
+import { ActorType, EventCategory, EventEntity, EventType } from './entities/event.entity';
 import { EventsRepository } from './events.repository';
 
 type CreateEventInput = {
   tenant_id: string;
   event_type: EventType;
+  event_category: EventCategory;
   entity_type: string;
   entity_id: string;
-  actor_user_id?: string | null;
+  actor_type: ActorType;
+  actor_id?: string | null;
   payload?: Record<string, unknown>;
+  correlation_id?: string | null;
+  idempotency_key?: string | null;
 };
 
 @Injectable()
@@ -27,20 +31,21 @@ export class EventsService {
     return this.eventsRepository.create({
       tenant_id: input.tenant_id,
       event_type: input.event_type,
+      event_category: input.event_category,
       entity_type: input.entity_type.trim(),
       entity_id: input.entity_id.trim(),
-      actor_user_id: input.actor_user_id ?? null,
-      payload: input.payload ?? {}
+      actor_type: input.actor_type,
+      actor_id: input.actor_id ?? null,
+      occurred_at: new Date().toISOString(),
+      payload: input.payload ?? {},
+      correlation_id: input.correlation_id ?? null,
+      idempotency_key: input.idempotency_key ?? null
     });
   }
 
   private validateCreateInput(input: CreateEventInput): void {
     if (!input.tenant_id || input.tenant_id.trim().length === 0) {
       throw new BadRequestException('tenant_id is required');
-    }
-
-    if (!input.event_type || input.event_type.trim().length === 0) {
-      throw new BadRequestException('event_type is required');
     }
 
     if (!input.entity_type || input.entity_type.trim().length === 0) {
@@ -53,20 +58,12 @@ export class EventsService {
   }
 
   private validateDateRange(query: QueryEventsDto): void {
-    if (query.created_at_from && Number.isNaN(new Date(query.created_at_from).valueOf())) {
-      throw new BadRequestException('created_at_from must be a valid ISO-8601 date');
+    if (query.occurred_at_from && Number.isNaN(new Date(query.occurred_at_from).valueOf())) {
+      throw new BadRequestException('occurred_at_from must be a valid ISO-8601 date');
     }
 
-    if (query.created_at_to && Number.isNaN(new Date(query.created_at_to).valueOf())) {
-      throw new BadRequestException('created_at_to must be a valid ISO-8601 date');
-    }
-
-    if (query.created_at_from && query.created_at_to) {
-      const fromDate = new Date(query.created_at_from);
-      const toDate = new Date(query.created_at_to);
-      if (fromDate > toDate) {
-        throw new BadRequestException('created_at_from must be earlier than or equal to created_at_to');
-      }
+    if (query.occurred_at_to && Number.isNaN(new Date(query.occurred_at_to).valueOf())) {
+      throw new BadRequestException('occurred_at_to must be a valid ISO-8601 date');
     }
   }
 }

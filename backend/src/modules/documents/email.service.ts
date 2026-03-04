@@ -28,7 +28,7 @@ export class EmailService {
       to: input.customerEmail,
       subject,
       summary,
-      attachment_path: input.document.file_path,
+      attachment_path: input.document.storage_uri,
       sent_at: new Date().toISOString()
     };
   }

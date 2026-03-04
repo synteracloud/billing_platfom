@@ -7,6 +7,8 @@ export interface CreateInvoiceDto {
   issue_date?: string | null;
   due_date?: string | null;
   subscription_id?: string | null;
+  notes?: string | null;
+  discount_minor?: number;
   metadata?: Record<string, unknown> | null;
   lines?: AddLineDto[];
 }

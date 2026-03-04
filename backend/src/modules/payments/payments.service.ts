@@ -1,10 +1,6 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { CustomersService } from '../customers/customers.service';
+import { EventsService } from '../events/events.service';
 import { InvoicesRepository } from '../invoices/invoices.repository';
 import { InvoiceEntity } from '../invoices/entities/invoice.entity';
 import { AllocatePaymentDto } from './dto/allocate-payment.dto';
@@ -15,8 +11,6 @@ import { PaymentsRepository } from './payments.repository';
 
 type PaymentDetails = PaymentEntity & {
   allocations: PaymentAllocationEntity[];
-  allocated_minor: number;
-  unallocated_minor: number;
 };
 
 @Injectable()
@@ -24,7 +18,8 @@ export class PaymentsService {
   constructor(
     private readonly paymentsRepository: PaymentsRepository,
     private readonly invoicesRepository: InvoicesRepository,
-    private readonly customersService: CustomersService
+    private readonly customersService: CustomersService,
+    private readonly eventsService: EventsService
   ) {}
 
   listPayments(tenantId: string): PaymentDetails[] {
@@ -38,15 +33,32 @@ export class PaymentsService {
     const payment = this.paymentsRepository.create({
       tenant_id: tenantId,
       customer_id: data.customer_id,
-      amount_minor: data.amount_minor,
+      payment_reference: data.payment_reference?.trim() || null,
+      payment_date: data.payment_date,
       currency: data.currency.trim().toUpperCase(),
+      amount_received_minor: data.amount_received_minor,
+      allocated_minor: 0,
+      unallocated_minor: data.amount_received_minor,
       payment_method: data.payment_method.trim(),
-      reference: data.reference?.trim() || null,
       status: 'recorded',
       metadata: data.metadata ?? null
     });
 
-    return this.buildPaymentDetails(tenantId, payment);
+    if (data.allocations && data.allocations.length > 0) {
+      this.allocatePayment(tenantId, payment.id, { allocations: data.allocations });
+    }
+
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'payment_recorded',
+      event_category: 'financial',
+      entity_type: 'payment',
+      entity_id: payment.id,
+      actor_type: 'system',
+      payload: { amount_received_minor: payment.amount_received_minor }
+    });
+
+    return this.getPayment(tenantId, payment.id);
   }
 
   getPayment(tenantId: string, paymentId: string): PaymentDetails {
@@ -63,8 +75,8 @@ export class PaymentsService {
     this.validateAllocatePayload(data);
 
     const alreadyAllocated = this.paymentsRepository.sumAllocatedForPayment(tenantId, paymentId);
-    const requestedTotal = data.allocations.reduce((sum, item) => sum + item.allocated_amount_minor, 0);
-    if (alreadyAllocated + requestedTotal > payment.amount_minor) {
+    const requestedTotal = data.allocations.reduce((sum, item) => sum + item.allocated_minor, 0);
+    if (alreadyAllocated + requestedTotal > payment.amount_received_minor) {
       throw new ConflictException('Allocated total must not exceed payment amount');
     }
 
@@ -72,7 +84,7 @@ export class PaymentsService {
       const invoice = this.requireAllocatableInvoice(tenantId, item.invoice_id, payment);
       const invoiceAllocated = this.paymentsRepository.sumAllocatedForInvoice(tenantId, invoice.id);
       const invoiceOutstanding = invoice.total_minor - invoiceAllocated;
-      if (item.allocated_amount_minor > invoiceOutstanding) {
+      if (item.allocated_minor > invoiceOutstanding) {
         throw new ConflictException('Allocated total must not exceed invoice outstanding balance');
       }
     }
@@ -83,14 +95,28 @@ export class PaymentsService {
         tenant_id: tenantId,
         payment_id: paymentId,
         invoice_id: item.invoice_id,
-        allocated_amount_minor: item.allocated_amount_minor
+        allocated_minor: item.allocated_minor,
+        allocation_date: item.allocation_date ?? new Date().toISOString().slice(0, 10),
+        metadata: null
       });
       touchedInvoiceIds.add(item.invoice_id);
     }
 
+    this.refreshPaymentAllocationBalance(tenantId, paymentId);
+
     for (const invoiceId of touchedInvoiceIds) {
       this.syncInvoicePaymentStatus(tenantId, invoiceId);
     }
+
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'payment_allocated',
+      event_category: 'financial',
+      entity_type: 'payment',
+      entity_id: paymentId,
+      actor_type: 'system',
+      payload: { allocations: data.allocations.length }
+    });
 
     return this.getPayment(tenantId, paymentId);
   }
@@ -102,14 +128,38 @@ export class PaymentsService {
     }
 
     const removedAllocations = this.paymentsRepository.deleteAllocationsByPayment(tenantId, paymentId);
-    this.paymentsRepository.update(tenantId, paymentId, { status: 'void' });
+    this.paymentsRepository.update(tenantId, paymentId, {
+      status: 'void',
+      allocated_minor: 0,
+      unallocated_minor: payment.amount_received_minor
+    });
 
     const touchedInvoiceIds = new Set(removedAllocations.map((allocation) => allocation.invoice_id));
     for (const invoiceId of touchedInvoiceIds) {
       this.syncInvoicePaymentStatus(tenantId, invoiceId);
     }
 
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'payment_voided',
+      event_category: 'financial',
+      entity_type: 'payment',
+      entity_id: paymentId,
+      actor_type: 'system',
+      payload: {}
+    });
+
     return this.getPayment(tenantId, paymentId);
+  }
+
+  private refreshPaymentAllocationBalance(tenantId: string, paymentId: string): void {
+    const payment = this.getPaymentRecord(tenantId, paymentId);
+    const allocatedMinor = this.paymentsRepository.sumAllocatedForPayment(tenantId, paymentId);
+
+    this.paymentsRepository.update(tenantId, paymentId, {
+      allocated_minor: allocatedMinor,
+      unallocated_minor: payment.amount_received_minor - allocatedMinor
+    });
   }
 
   private syncInvoicePaymentStatus(tenantId: string, invoiceId: string): void {
@@ -119,36 +169,38 @@ export class PaymentsService {
     }
 
     const allocated = this.paymentsRepository.sumAllocatedForInvoice(tenantId, invoiceId);
+    const paidMinor = Math.min(allocated, invoice.total_minor);
+    const dueMinor = Math.max(0, invoice.total_minor - paidMinor);
+
     let nextStatus: InvoiceEntity['status'];
-    if (allocated <= 0) {
+    if (paidMinor <= 0) {
       nextStatus = 'issued';
-    } else if (allocated >= invoice.total_minor) {
+    } else if (dueMinor === 0) {
       nextStatus = 'paid';
     } else {
       nextStatus = 'partially_paid';
     }
 
-    if (invoice.status !== nextStatus) {
-      this.invoicesRepository.update(tenantId, invoiceId, { status: nextStatus });
-    }
+    this.invoicesRepository.update(tenantId, invoiceId, {
+      status: nextStatus,
+      amount_paid_minor: paidMinor,
+      amount_due_minor: dueMinor
+    });
   }
 
   private buildPaymentDetails(tenantId: string, payment: PaymentEntity): PaymentDetails {
     const allocations = this.paymentsRepository.listAllocationsByPayment(tenantId, payment.id);
-    const allocatedMinor = allocations.reduce((sum, item) => sum + item.allocated_amount_minor, 0);
 
     return {
       ...payment,
-      allocations,
-      allocated_minor: allocatedMinor,
-      unallocated_minor: payment.amount_minor - allocatedMinor
+      allocations
     };
   }
 
   private requireAllocatablePayment(tenantId: string, paymentId: string): PaymentEntity {
     const payment = this.getPaymentRecord(tenantId, paymentId);
-    if (payment.status !== 'recorded') {
-      throw new ConflictException('Only recorded payments can be allocated');
+    if (payment.status !== 'recorded' && payment.status !== 'settled') {
+      throw new ConflictException('Only active payments can be allocated');
     }
 
     return payment;
@@ -189,8 +241,8 @@ export class PaymentsService {
       throw new BadRequestException('customer_id is required');
     }
 
-    if (!Number.isFinite(data.amount_minor) || data.amount_minor < 0) {
-      throw new BadRequestException('amount_minor must be greater than or equal to 0');
+    if (!Number.isFinite(data.amount_received_minor) || data.amount_received_minor < 0) {
+      throw new BadRequestException('amount_received_minor must be greater than or equal to 0');
     }
 
     if (!data.currency || data.currency.trim().length !== 3) {
@@ -199,6 +251,10 @@ export class PaymentsService {
 
     if (!data.payment_method || data.payment_method.trim().length === 0) {
       throw new BadRequestException('payment_method is required');
+    }
+
+    if (Number.isNaN(new Date(data.payment_date).getTime())) {
+      throw new BadRequestException('payment_date must be a valid date');
     }
   }
 
@@ -212,8 +268,8 @@ export class PaymentsService {
         throw new BadRequestException('invoice_id is required for each allocation');
       }
 
-      if (!Number.isFinite(allocation.allocated_amount_minor) || allocation.allocated_amount_minor <= 0) {
-        throw new BadRequestException('allocated_amount_minor must be greater than 0');
+      if (!Number.isFinite(allocation.allocated_minor) || allocation.allocated_minor <= 0) {
+        throw new BadRequestException('allocated_minor must be greater than 0');
       }
     }
   }

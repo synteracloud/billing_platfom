@@ -1,7 +1,10 @@
 export interface QueryEventsDto {
+  event_category?: string;
   event_type?: string;
   entity_type?: string;
   entity_id?: string;
-  created_at_from?: string;
-  created_at_to?: string;
+  actor_type?: string;
+  occurred_at_from?: string;
+  occurred_at_to?: string;
+  correlation_id?: string;
 }

@@ -56,11 +56,13 @@ export class PaymentsRepository {
     return updated;
   }
 
-  createAllocation(allocation: Omit<PaymentAllocationEntity, 'id' | 'created_at'>): PaymentAllocationEntity {
+  createAllocation(allocation: Omit<PaymentAllocationEntity, 'id' | 'created_at' | 'updated_at'>): PaymentAllocationEntity {
+    const now = new Date().toISOString();
     const created: PaymentAllocationEntity = {
       ...allocation,
       id: randomUUID(),
-      created_at: new Date().toISOString()
+      created_at: now,
+      updated_at: now
     };
 
     this.allocations.set(created.id, created);
@@ -80,11 +82,11 @@ export class PaymentsRepository {
   }
 
   sumAllocatedForPayment(tenantId: string, paymentId: string): number {
-    return this.listAllocationsByPayment(tenantId, paymentId).reduce((sum, item) => sum + item.allocated_amount_minor, 0);
+    return this.listAllocationsByPayment(tenantId, paymentId).reduce((sum, item) => sum + item.allocated_minor, 0);
   }
 
   sumAllocatedForInvoice(tenantId: string, invoiceId: string): number {
-    return this.listAllocationsByInvoice(tenantId, invoiceId).reduce((sum, item) => sum + item.allocated_amount_minor, 0);
+    return this.listAllocationsByInvoice(tenantId, invoiceId).reduce((sum, item) => sum + item.allocated_minor, 0);
   }
 
   deleteAllocationsByPayment(tenantId: string, paymentId: string): PaymentAllocationEntity[] {

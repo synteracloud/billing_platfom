@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import { dirname, resolve } from 'path';
 import { InvoiceLineEntity } from '../invoices/entities/invoice-line.entity';
@@ -19,7 +20,7 @@ export class PdfService {
   constructor(private readonly documentsRepository: DocumentsRepository) {}
 
   async generateInvoicePdf(tenantId: string, input: GenerateInvoicePdfInput): Promise<DocumentEntity> {
-    const existing = this.documentsRepository.findByInvoiceAndType(tenantId, input.invoice.id, 'invoice_pdf');
+    const existing = this.documentsRepository.findBySourceAndType(tenantId, input.invoice.id, 'invoice_pdf');
     if (existing) {
       return existing;
     }
@@ -59,9 +60,15 @@ export class PdfService {
 
     return this.documentsRepository.create({
       tenant_id: tenantId,
-      invoice_id: input.invoice.id,
       document_type: 'invoice_pdf',
-      file_path: filePath
+      source_entity_type: 'invoice',
+      source_entity_id: input.invoice.id,
+      template_reference: null,
+      storage_uri: filePath,
+      checksum: createHash('sha256').update(content).digest('hex'),
+      generation_status: 'generated',
+      generated_at: new Date().toISOString(),
+      metadata: null
     });
   }
 }

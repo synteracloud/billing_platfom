@@ -1,6 +1,7 @@
 export interface AllocatePaymentItemDto {
   invoice_id: string;
-  allocated_amount_minor: number;
+  allocated_minor: number;
+  allocation_date?: string;
 }
 
 export interface AllocatePaymentDto {

@@ -1,15 +1,11 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { CustomersService } from '../customers/customers.service';
+import { EventsService } from '../events/events.service';
 import { CreateInvoiceDto } from '../invoices/dto/create-invoice.dto';
 import { InvoicesService } from '../invoices/invoices.service';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
-import { BillingInterval, SubscriptionEntity } from './entities/subscription.entity';
+import { BillingFrequency, SubscriptionEntity } from './entities/subscription.entity';
 import { SubscriptionsRepository } from './subscriptions.repository';
 
 @Injectable()
@@ -17,7 +13,8 @@ export class SubscriptionsService {
   constructor(
     private readonly subscriptionsRepository: SubscriptionsRepository,
     private readonly customersService: CustomersService,
-    private readonly invoicesService: InvoicesService
+    private readonly invoicesService: InvoicesService,
+    private readonly eventsService: EventsService
   ) {}
 
   listSubscriptions(tenantId: string): SubscriptionEntity[] {
@@ -28,20 +25,32 @@ export class SubscriptionsService {
     this.validateCreatePayload(data);
     this.customersService.getCustomer(tenantId, data.customer_id);
 
-    return this.subscriptionsRepository.create({
+    const created = this.subscriptionsRepository.create({
       tenant_id: tenantId,
       customer_id: data.customer_id,
-      product_id: data.product_id ?? null,
-      name: data.name.trim(),
-      billing_interval: data.billing_interval,
-      amount_minor: data.amount_minor,
-      currency: data.currency.trim().toUpperCase(),
+      plan_reference: data.plan_reference ?? null,
+      status: data.status ?? 'draft',
       start_date: data.start_date,
       end_date: data.end_date ?? null,
+      billing_frequency: data.billing_frequency,
       next_billing_date: data.next_billing_date ?? data.start_date,
-      status: 'active',
+      auto_renew: data.auto_renew ?? true,
+      pricing_terms: data.pricing_terms,
+      canceled_at: null,
       metadata: data.metadata ?? null
     });
+
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'subscription_created',
+      event_category: 'financial',
+      entity_type: 'subscription',
+      entity_id: created.id,
+      actor_type: 'system',
+      payload: { status: created.status }
+    });
+
+    return created;
   }
 
   getSubscription(tenantId: string, id: string): SubscriptionEntity {
@@ -55,18 +64,13 @@ export class SubscriptionsService {
 
   updateSubscription(tenantId: string, id: string, data: UpdateSubscriptionDto): SubscriptionEntity {
     const existing = this.getSubscription(tenantId, id);
-    if (existing.status === 'cancelled') {
-      throw new ConflictException('Cancelled subscriptions cannot be updated');
+    if (existing.status === 'canceled' || existing.status === 'expired') {
+      throw new ConflictException('Terminal subscriptions cannot be updated');
     }
 
     this.validateUpdatePayload(data);
 
-    const next = this.subscriptionsRepository.update(tenantId, id, {
-      ...data,
-      name: data.name?.trim(),
-      currency: data.currency?.trim().toUpperCase()
-    });
-
+    const next = this.subscriptionsRepository.update(tenantId, id, { ...data });
     if (!next) {
       throw new NotFoundException('Subscription not found');
     }
@@ -76,40 +80,28 @@ export class SubscriptionsService {
 
   cancelSubscription(tenantId: string, id: string): SubscriptionEntity {
     const subscription = this.getSubscription(tenantId, id);
-    if (subscription.status === 'cancelled') {
+    if (subscription.status === 'canceled') {
       return subscription;
     }
 
-    return this.subscriptionsRepository.update(tenantId, id, {
-      status: 'cancelled',
-      end_date: subscription.end_date ?? this.todayDate()
-    })!;
-  }
+    const now = new Date().toISOString();
+    const updated = this.subscriptionsRepository.update(tenantId, id, {
+      status: 'canceled',
+      canceled_at: now,
+      end_date: subscription.end_date ?? now.slice(0, 10)
+    });
 
-  pauseSubscription(tenantId: string, id: string): SubscriptionEntity {
-    const subscription = this.getSubscription(tenantId, id);
-    if (subscription.status === 'cancelled') {
-      throw new ConflictException('Cancelled subscriptions cannot be paused');
-    }
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'subscription_cancelled',
+      event_category: 'financial',
+      entity_type: 'subscription',
+      entity_id: id,
+      actor_type: 'system',
+      payload: {}
+    });
 
-    if (subscription.status === 'paused') {
-      return subscription;
-    }
-
-    return this.subscriptionsRepository.update(tenantId, id, { status: 'paused' })!;
-  }
-
-  resumeSubscription(tenantId: string, id: string): SubscriptionEntity {
-    const subscription = this.getSubscription(tenantId, id);
-    if (subscription.status === 'cancelled') {
-      throw new ConflictException('Cancelled subscriptions cannot be resumed');
-    }
-
-    if (subscription.status === 'active') {
-      return subscription;
-    }
-
-    return this.subscriptionsRepository.update(tenantId, id, { status: 'active' })!;
+    return updated!;
   }
 
   processDueSubscriptions(asOf = new Date()): { processed: number; invoices_generated: number } {
@@ -117,6 +109,10 @@ export class SubscriptionsService {
     let invoicesGenerated = 0;
 
     for (const subscription of dueSubscriptions) {
+      if (subscription.status !== 'active' || !subscription.next_billing_date) {
+        continue;
+      }
+
       let nextBillingDate = subscription.next_billing_date;
       let generatedForCurrentSubscription = 0;
 
@@ -125,23 +121,24 @@ export class SubscriptionsService {
           break;
         }
 
+        const amountMinor = Number(subscription.pricing_terms.amount_minor ?? 0);
+        const description = String(subscription.pricing_terms.description ?? subscription.plan_reference ?? 'Subscription');
+
         const payload: CreateInvoiceDto = {
           customer_id: subscription.customer_id,
           subscription_id: subscription.id,
-          currency: subscription.currency,
+          currency: String(subscription.pricing_terms.currency ?? 'USD'),
           issue_date: nextBillingDate,
           metadata: {
             source: 'subscription',
-            subscription_name: subscription.name,
             ...(subscription.metadata ?? {})
           },
           lines: [
             {
-              product_id: subscription.product_id,
-              description: subscription.name,
+              description,
               quantity: 1,
-              unit_price_minor: subscription.amount_minor,
-              line_tax_minor: 0
+              unit_price_minor: amountMinor,
+              line_tax_minor: Number(subscription.pricing_terms.tax_minor ?? 0)
             }
           ]
         };
@@ -149,7 +146,7 @@ export class SubscriptionsService {
         this.invoicesService.createInvoice(subscription.tenant_id, payload);
         invoicesGenerated += 1;
         generatedForCurrentSubscription += 1;
-        nextBillingDate = this.advanceDate(nextBillingDate, subscription.billing_interval);
+        nextBillingDate = this.advanceDate(nextBillingDate, subscription.billing_frequency);
       }
 
       if (generatedForCurrentSubscription > 0) {
@@ -170,72 +167,31 @@ export class SubscriptionsService {
       throw new BadRequestException('customer_id is required');
     }
 
-    if (!data.name || data.name.trim().length === 0) {
-      throw new BadRequestException('name is required');
-    }
-
-    this.validateBillingInterval(data.billing_interval);
-    this.validateAmount(data.amount_minor);
-    this.validateCurrency(data.currency);
+    this.validateBillingFrequency(data.billing_frequency);
     this.validateDate(data.start_date, 'start_date');
 
-    if (data.end_date !== undefined && data.end_date !== null) {
+    if (data.end_date) {
       this.validateDate(data.end_date, 'end_date');
-      if (new Date(data.end_date).getTime() < new Date(data.start_date).getTime()) {
-        throw new BadRequestException('end_date must be on or after start_date');
-      }
-    }
-
-    if (data.next_billing_date !== undefined) {
-      this.validateDate(data.next_billing_date, 'next_billing_date');
     }
   }
 
   private validateUpdatePayload(data: UpdateSubscriptionDto): void {
-    if (data.name !== undefined && data.name.trim().length === 0) {
-      throw new BadRequestException('name must not be empty');
-    }
-
-    if (data.billing_interval !== undefined) {
-      this.validateBillingInterval(data.billing_interval);
-    }
-
-    if (data.amount_minor !== undefined) {
-      this.validateAmount(data.amount_minor);
-    }
-
-    if (data.currency !== undefined) {
-      this.validateCurrency(data.currency);
-    }
-
-    if (data.start_date !== undefined) {
-      this.validateDate(data.start_date, 'start_date');
+    if (data.billing_frequency !== undefined) {
+      this.validateBillingFrequency(data.billing_frequency);
     }
 
     if (data.end_date !== undefined && data.end_date !== null) {
       this.validateDate(data.end_date, 'end_date');
     }
 
-    if (data.next_billing_date !== undefined) {
+    if (data.next_billing_date !== undefined && data.next_billing_date !== null) {
       this.validateDate(data.next_billing_date, 'next_billing_date');
     }
   }
 
-  private validateBillingInterval(value: string): void {
-    if (value !== 'monthly' && value !== 'yearly') {
-      throw new BadRequestException('billing_interval must be monthly or yearly');
-    }
-  }
-
-  private validateAmount(amountMinor: number): void {
-    if (!Number.isFinite(amountMinor) || amountMinor < 0) {
-      throw new BadRequestException('amount_minor must be greater than or equal to 0');
-    }
-  }
-
-  private validateCurrency(currency: string): void {
-    if (!currency || currency.trim().length !== 3) {
-      throw new BadRequestException('currency must be a 3-letter ISO code');
+  private validateBillingFrequency(value: string): void {
+    if (value !== 'monthly' && value !== 'quarterly' && value !== 'yearly' && value !== 'custom') {
+      throw new BadRequestException('billing_frequency must be monthly, quarterly, yearly, or custom');
     }
   }
 
@@ -245,18 +201,19 @@ export class SubscriptionsService {
     }
   }
 
-  private advanceDate(isoDate: string, interval: BillingInterval): string {
+  private advanceDate(isoDate: string, frequency: BillingFrequency): string {
     const date = new Date(isoDate);
-    if (interval === 'monthly') {
+
+    if (frequency === 'monthly') {
       date.setMonth(date.getMonth() + 1);
-    } else {
+    } else if (frequency === 'quarterly') {
+      date.setMonth(date.getMonth() + 3);
+    } else if (frequency === 'yearly') {
       date.setFullYear(date.getFullYear() + 1);
+    } else {
+      date.setMonth(date.getMonth() + 1);
     }
 
     return date.toISOString();
-  }
-
-  private todayDate(): string {
-    return new Date().toISOString().slice(0, 10);
   }
 }
