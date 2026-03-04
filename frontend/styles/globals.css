@@ -1,3 +1,5 @@
+@import "./tokens.css";
+
 :root {
   color-scheme: light;
 }
@@ -10,6 +12,11 @@ html,
 body {
   margin: 0;
   padding: 0;
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--typography-font-family-primary);
+  font-size: var(--typography-font-size-md);
+  line-height: var(--typography-font-line-height-md);
 }
 
 a {
@@ -22,5 +29,5 @@ ul {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 12px;
+  gap: var(--space-md);
 }

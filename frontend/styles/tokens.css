@@ -1,0 +1,135 @@
+:root {
+  --color-background: #F7F8FA;
+  --color-surface: #FFFFFF;
+  --color-surface-elevated: #FFFFFF;
+  --color-surface-muted: #F3F4F6;
+  --color-text-primary: #111827;
+  --color-text-secondary: #374151;
+  --color-text-muted: #6B7280;
+  --color-text-inverse: #F9FAFB;
+  --color-border-default: #D1D5DB;
+  --color-border-subtle: #E5E7EB;
+  --color-border-strong: #9CA3AF;
+  --color-primary: #2563EB;
+  --color-primary-hover: #1D4ED8;
+  --color-primary-active: #1E40AF;
+  --color-success: #059669;
+  --color-warning: #D97706;
+  --color-danger: #DC2626;
+  --color-info: #0284C7;
+  --color-focus-ring: #93C5FD;
+  --color-table-header: #F9FAFB;
+  --color-table-row-hover: #EFF6FF;
+  --color-overlay: rgba(17, 24, 39, 0.45);
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 40px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --typography-font-family-primary: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --typography-font-family-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+  --typography-font-size-xs: 12px;
+  --typography-font-size-sm: 13px;
+  --typography-font-size-md: 14px;
+  --typography-font-size-lg: 16px;
+  --typography-font-size-xl: 20px;
+  --typography-font-size-display: 28px;
+  --typography-font-weight-normal: 400;
+  --typography-font-weight-medium: 500;
+  --typography-font-weight-semibold: 600;
+  --typography-font-weight-bold: 700;
+  --typography-font-line-height-xs: 1.4;
+  --typography-font-line-height-sm: 1.45;
+  --typography-font-line-height-md: 1.5;
+  --typography-font-line-height-lg: 1.55;
+  --typography-font-line-height-xl: 1.35;
+  --typography-font-line-height-display: 1.2;
+  --typography-font-letter-spacing-tight: -0.01em;
+  --typography-font-letter-spacing-normal: 0em;
+  --typography-font-letter-spacing-wide: 0.01em;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.12);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.18);
+
+  --border-width-thin: 1px;
+  --border-width-default: 2px;
+
+  --z-index-base: 1;
+  --z-index-dropdown: 1000;
+  --z-index-overlay: 1100;
+  --z-index-modal: 1200;
+  --z-index-toast: 1300;
+
+  --motion-duration-fast: 120ms;
+  --motion-duration-normal: 200ms;
+  --motion-duration-slow: 320ms;
+  --motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-easing-decelerate: cubic-bezier(0, 0, 0, 1);
+  --motion-easing-accelerate: cubic-bezier(0.3, 0, 1, 1);
+
+  --size-sidebar: 240px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-background: #0B1220;
+    --color-surface: #111827;
+    --color-surface-elevated: #1F2937;
+    --color-surface-muted: #0F172A;
+    --color-text-primary: #F9FAFB;
+    --color-text-secondary: #D1D5DB;
+    --color-text-muted: #9CA3AF;
+    --color-text-inverse: #111827;
+    --color-border-default: #374151;
+    --color-border-subtle: #1F2937;
+    --color-border-strong: #4B5563;
+    --color-primary: #60A5FA;
+    --color-primary-hover: #3B82F6;
+    --color-primary-active: #2563EB;
+    --color-success: #34D399;
+    --color-warning: #FBBF24;
+    --color-danger: #F87171;
+    --color-info: #38BDF8;
+    --color-focus-ring: #2563EB;
+    --color-table-header: #0F172A;
+    --color-table-row-hover: #1E293B;
+    --color-overlay: rgba(2, 6, 23, 0.7);
+  }
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --color-background: #0B1220;
+  --color-surface: #111827;
+  --color-surface-elevated: #1F2937;
+  --color-surface-muted: #0F172A;
+  --color-text-primary: #F9FAFB;
+  --color-text-secondary: #D1D5DB;
+  --color-text-muted: #9CA3AF;
+  --color-text-inverse: #111827;
+  --color-border-default: #374151;
+  --color-border-subtle: #1F2937;
+  --color-border-strong: #4B5563;
+  --color-primary: #60A5FA;
+  --color-primary-hover: #3B82F6;
+  --color-primary-active: #2563EB;
+  --color-success: #34D399;
+  --color-warning: #FBBF24;
+  --color-danger: #F87171;
+  --color-info: #38BDF8;
+  --color-focus-ring: #2563EB;
+  --color-table-header: #0F172A;
+  --color-table-row-hover: #1E293B;
+  --color-overlay: rgba(2, 6, 23, 0.7);
+}

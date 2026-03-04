@@ -1,17 +1,15 @@
-import { tokens } from '../../tokens/tokens';
-
 interface DataTableProps {
   columns?: string[];
   rows?: Array<Record<string, string | number | null>>;
 }
 
 export const DataTable = ({ columns = [], rows = [] }: DataTableProps) => (
-  <div style={{ overflowX: 'auto', border: `${tokens.border.width.thin} solid ${tokens.color.borderSubtle}`, borderRadius: tokens.radius.md }}>
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: tokens.typography.fontFamily }}>
-      <thead style={{ backgroundColor: tokens.color.tableHeader }}>
+  <div style={{ overflowX: 'auto', border: 'var(--border-width-thin) solid var(--color-border-subtle)', borderRadius: 'var(--radius-md)' }}>
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--typography-font-family-primary)' }}>
+      <thead style={{ backgroundColor: 'var(--color-table-header)' }}>
         <tr>
           {columns.map((column) => (
-            <th key={column} style={{ textAlign: 'left', padding: tokens.spacing.md, fontSize: tokens.typography.fontSize.sm, color: tokens.color.textSecondary, borderBottom: `${tokens.border.width.thin} solid ${tokens.color.borderSubtle}` }}>
+            <th key={column} style={{ textAlign: 'left', padding: 'var(--space-md)', fontSize: 'var(--typography-font-size-sm)', color: 'var(--color-text-secondary)', borderBottom: 'var(--border-width-thin) solid var(--color-border-subtle)' }}>
               {column}
             </th>
           ))}
@@ -19,9 +17,9 @@ export const DataTable = ({ columns = [], rows = [] }: DataTableProps) => (
       </thead>
       <tbody>
         {rows.map((row, index) => (
-          <tr key={`row-${index}`} style={{ borderBottom: `${tokens.border.width.thin} solid ${tokens.color.borderSubtle}` }}>
+          <tr key={`row-${index}`} style={{ borderBottom: 'var(--border-width-thin) solid var(--color-border-subtle)' }}>
             {columns.map((column) => (
-              <td key={`${index}-${column}`} style={{ padding: tokens.spacing.md, color: tokens.color.textPrimary }}>
+              <td key={`${index}-${column}`} style={{ padding: 'var(--space-md)', color: 'var(--color-text-primary)' }}>
                 {row[column] ?? ''}
               </td>
             ))}

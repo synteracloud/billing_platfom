@@ -1,17 +1,17 @@
 import type { InputHTMLAttributes } from 'react';
-import { tokens } from '../../tokens/tokens';
 
 export const Input = (props: InputHTMLAttributes<HTMLInputElement>) => (
   <input
     {...props}
     style={{
       width: '100%',
-      border: `${tokens.border.width.thin} solid ${tokens.color.borderDefault}`,
-      borderRadius: tokens.radius.md,
-      padding: `${tokens.spacing.sm} ${tokens.spacing.md}`,
-      fontSize: tokens.typography.fontSize.md,
-      color: tokens.color.textPrimary,
-      fontFamily: tokens.typography.fontFamily,
+      border: 'var(--border-width-thin) solid var(--color-border-default)',
+      borderRadius: 'var(--radius-md)',
+      padding: 'var(--space-sm) var(--space-md)',
+      fontSize: 'var(--typography-font-size-md)',
+      color: 'var(--color-text-primary)',
+      fontFamily: 'var(--typography-font-family-primary)',
+      backgroundColor: 'var(--color-surface)',
       ...(props.style ?? {}),
     }}
   />

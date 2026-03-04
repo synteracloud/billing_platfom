@@ -1,8 +1,8 @@
+import "../styles/globals.css";
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { AppShell } from '@billing-platform/ui';
 import { AuthProvider } from '@/lib/auth-context';
-import '@/styles/globals.css';
 
 const TopNav = () => <div>Billing Platform</div>;
 

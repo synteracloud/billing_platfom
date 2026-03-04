@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
-import { tokens } from '../../tokens/tokens';
 
 export const Card = ({ children }: { children?: ReactNode }) => (
-  <section style={{ backgroundColor: tokens.color.surface, border: `${tokens.border.width.thin} solid ${tokens.color.borderSubtle}`, borderRadius: tokens.radius.md, padding: tokens.spacing.lg, boxShadow: tokens.shadow.sm }}>
+  <section style={{ backgroundColor: 'var(--color-surface)', border: 'var(--border-width-thin) solid var(--color-border-subtle)', borderRadius: 'var(--radius-md)', padding: 'var(--space-lg)', boxShadow: 'var(--shadow-sm)' }}>
     {children}
   </section>
 );
