@@ -91,6 +91,120 @@ Flow:
   → tokens
   → UI
 
+
+## DESIGN SYSTEM AND FRONTEND ARCHITECTURE PRINCIPLES
+
+### 1) Core Principle
+The architecture balances backend data integrity with frontend presentation freedom to produce deterministic, high-quality UI/UX.
+
+Concept:
+- Data integrity (backend)
+  + Presentation freedom (frontend)
+  = Deterministic high-quality UI/UX
+
+Responsibility split:
+- Backend defines domain rules and guarantees correctness.
+- Frontend defines presentation and interaction design.
+
+### 2) Backend Responsibilities
+Backend defines:
+- domain models
+- financial rules
+- lifecycle states
+- API contracts
+- multi-tenant data isolation
+
+Backend must NOT define:
+- layout
+- visual hierarchy
+- styling
+- UI composition
+
+### 3) Frontend Responsibilities
+Frontend defines:
+- layout
+- visual hierarchy
+- interaction design
+- navigation structure
+- UI composition
+
+Frontend must NOT modify:
+- financial logic
+- domain rules
+- data integrity constraints
+
+### 4) Frontend Architecture Layers
+Layer 1 — Design Tokens
+- colors
+- spacing
+- typography
+- shadows
+- motion
+
+Layer 2 — Component System
+- buttons
+- inputs
+- tables
+- cards
+- drawers
+- modals
+- charts
+
+Layer 3 — Wireframes
+- Structural layout definitions for application screens.
+- Examples:
+  - dashboard
+  - customers
+  - products
+  - invoices
+  - payments
+- Wireframes define structure only and contain no styling.
+
+Layer 4 — Renderer
+- Schema-driven UI engine mapping:
+  - wireframes → components → tokens
+- Renderer ensures deterministic UI generation.
+
+Layer 5 — Application Pages
+- Next.js pages binding backend APIs to renderer schemas.
+
+### 5) Determinism Rules
+UI rendering must originate from:
+- tokens
+- components
+- wireframes
+- renderer schemas
+
+Direct styling inside pages is not allowed.
+
+### 6) No Drift Rule
+Changes occur only at these levels:
+- visual design → tokens
+- interaction patterns → components
+- layout structure → wireframes
+- business data → backend
+
+This prevents architectural drift.
+
+### 7) Design Quality Goal
+Target design quality comparable to:
+- Stripe Dashboard
+- Linear
+- Notion
+
+Characteristics:
+- high visual clarity
+- dense but readable data
+- consistent interactions
+- predictable layouts
+
+### 8) Success Criteria
+The system must deliver:
+- strong financial data integrity
+- deterministic UI architecture
+- visually exceptional interface
+- scalable maintainability
+
 ## 5. Domain Modules
 - **tenants**
   - Tenant lifecycle, plan metadata, regional settings, feature entitlements.
