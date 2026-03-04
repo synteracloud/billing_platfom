@@ -69,7 +69,7 @@ Represents a bill-to client of a tenant.
 - `shipping_address` (optional)
 - `tax_identifier`
 - `currency_preference` (optional)
-- `payment_terms`
+- `payment_terms_days`
 - `status` (active, archived)
 - `created_at`, `updated_at`
 
@@ -91,10 +91,10 @@ Represents a product or service sold by a tenant, including pricing metadata use
 - `sku` or `code`
 - `name`
 - `description`
-- `unit_price`
+- `unit_price_minor`
 - `currency`
 - `tax_category`
-- `billing_type` (one-time, recurring)
+- `billing_type` (one_time, recurring)
 - `is_active`
 - `created_at`, `updated_at`
 
@@ -115,16 +115,16 @@ Represents a bill issued by a tenant to a customer, with deterministic totals, t
 - `tenant_id`
 - `customer_id`
 - `invoice_number`
-- `status` (Draft, Issued, Partially Paid, Paid, Void)
+- `status` (`draft`, `issued`, `partially_paid`, `paid`, `void`)
 - `issue_date`
 - `due_date`
 - `currency`
-- `subtotal_amount`
-- `tax_amount`
-- `discount_amount`
-- `total_amount`
-- `amount_paid`
-- `amount_due`
+- `subtotal_minor`
+- `tax_minor`
+- `discount_minor`
+- `total_minor`
+- `amount_paid_minor`
+- `amount_due_minor`
 - `notes`
 - `created_at`, `updated_at`, `issued_at`, `voided_at`
 
@@ -148,11 +148,11 @@ Represents a single billable line item on an invoice.
 - `product_id` (optional reference)
 - `description`
 - `quantity`
-- `unit_price`
+- `unit_price_minor`
 - `tax_rate` or `tax_code`
-- `line_subtotal`
-- `line_tax_amount`
-- `line_total`
+- `line_subtotal_minor`
+- `line_tax_minor`
+- `line_total_minor`
 - `sort_order`
 
 **Ownership (tenant-scoped)**  
@@ -176,10 +176,10 @@ Represents money received from a customer and tracked for allocation against one
 - `payment_method`
 - `payment_date`
 - `currency`
-- `amount_received`
+- `amount_received_minor`
 - `status` (recorded, pending_settlement, settled, failed, refunded)
-- `unallocated_amount`
-- `allocated_amount`
+- `unallocated_minor`
+- `allocated_minor`
 - `metadata` (gateway/provider references)
 - `created_at`, `updated_at`
 
@@ -192,6 +192,31 @@ Recorded/Pending → Settled → (optional) Refunded/Reversed with traceable adj
 
 ---
 
+### PaymentAllocation
+**Purpose**  
+Represents an allocation record linking a payment amount to a specific invoice.
+
+**Key attributes**  
+- `id`
+- `tenant_id`
+- `payment_id`
+- `invoice_id`
+- `allocated_minor`
+- `allocation_date`
+- `created_by_user_id` (optional)
+- `metadata`
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**  
+- Belongs to exactly one `Tenant`.
+- Belongs to exactly one `Payment` in the same tenant.
+- Belongs to exactly one `Invoice` in the same tenant.
+
+**Lifecycle**  
+Created append-only as part of payment allocation workflow; reversals are modeled by compensating financial operations per policy.
+
+---
+
 ### Subscription
 **Purpose**  
 Represents recurring billing configuration used to generate invoices on a schedule.
@@ -200,7 +225,7 @@ Represents recurring billing configuration used to generate invoices on a schedu
 - `id`
 - `tenant_id`
 - `customer_id`
-- `plan_name` or `plan_reference`
+- `plan_reference`
 - `status` (draft, active, paused, canceled, expired)
 - `start_date`
 - `end_date` (optional)
@@ -245,7 +270,7 @@ Requested → Generated → Delivered/Archived (or Failed with retry).
 
 ---
 
-### Event
+### EventLog
 **Purpose**  
 Represents immutable audit/system events for financial and permission-sensitive operations.
 
@@ -253,7 +278,7 @@ Represents immutable audit/system events for financial and permission-sensitive 
 - `id`
 - `tenant_id`
 - `event_type`
-- `event_category` (audit, domain, integration)
+- `event_category` (audit, financial, integration)
 - `entity_type`
 - `entity_id`
 - `actor_type` (user, system)
@@ -279,7 +304,7 @@ Append-only and immutable after creation.
 - `Tenant` 1 → many `Payments`
 - `Tenant` 1 → many `Subscriptions`
 - `Tenant` 1 → many `Documents`
-- `Tenant` 1 → many `Events`
+- `Tenant` 1 → many `EventLogs`
 
 ### Customer relationships
 - `Customer` 1 → many `Invoices`
@@ -290,7 +315,7 @@ Append-only and immutable after creation.
 - `Invoice` 1 → many `InvoiceLines`
 - `Invoice` many ↔ many `Payments` (through payment allocations)
 - `Invoice` 1 → many `Documents` (invoice PDF versions, etc.)
-- `Invoice` 1 → many `Events`
+- `Invoice` 1 → many `EventLogs`
 
 ### Subscription relationships
 - `Subscription` many → 1 `Customer`
@@ -299,7 +324,7 @@ Append-only and immutable after creation.
 ### Additional relationship constraints
 - Cross-tenant relationships are invalid.
 - Referenced entities (for example `invoice.customer_id`) must belong to the same tenant.
-- Financial mutations (invoice state changes, payment allocations, voids, refunds) should emit `Events`.
+- Financial mutations (invoice state changes, payment allocations, voids, refunds) should emit `EventLogs`.
 
 ## 4. Invoice Lifecycle
 Invoice state machine:
@@ -333,11 +358,11 @@ Payments use an allocation model that supports one-to-many and many-to-many sett
 - Allocation records should track:
   - `payment_id`
   - `invoice_id`
-  - `allocated_amount`
-  - `allocated_at`
+  - `allocated_minor`
+  - `allocation_date`
   - optional `allocation_reference`/notes
-- `Payment.unallocated_amount` decreases as allocations are made.
-- `Invoice.amount_paid` and `Invoice.amount_due` are recalculated deterministically from allocation totals.
+- `Payment.unallocated_minor` decreases as allocations are made.
+- `Invoice.amount_paid_minor` and `Invoice.amount_due_minor` are recalculated deterministically from allocation totals.
 - Allocations must enforce:
   - same-tenant linkage between payment and invoice
   - currency compatibility or explicit FX policy
@@ -350,4 +375,4 @@ Payments use an allocation model that supports one-to-many and many-to-many sett
 3. **Intra-tenant integrity**: Entity references are valid only when all linked records share the same `tenant_id`.
 4. **Tenant-aware authorization**: User actions are permitted only within memberships and roles for their tenant.
 5. **Tenant-configured behavior**: Locale, currency, tax policy, invoice numbering, and feature flags are resolved from tenant settings.
-6. **Auditability by tenant**: Financial and sensitive domain changes must emit immutable tenant-scoped events.
+6. **Auditability by tenant**: Financial and sensitive domain changes must emit immutable tenant-scoped event logs.

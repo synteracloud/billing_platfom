@@ -77,6 +77,7 @@
 - `(tenant_id) -> tenant(id)`
 
 **Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
 - `UNIQUE (tenant_id, email)`
 
 **Key indexes**
@@ -113,6 +114,7 @@
 - `(tenant_id) -> tenant(id)`
 
 **Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
 - `UNIQUE (tenant_id, external_reference)` where `external_reference IS NOT NULL`
 
 **Key indexes**
@@ -148,6 +150,7 @@
 - `(tenant_id) -> tenant(id)`
 
 **Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
 - `UNIQUE (tenant_id, sku)`
 
 **Key indexes**
@@ -185,6 +188,7 @@
 - `(tenant_id, customer_id) -> customer(tenant_id, id)`
 
 **Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
 - Optional based on catalog strategy: `UNIQUE (tenant_id, customer_id, plan_reference)` where `plan_reference IS NOT NULL`
 
 **Key indexes**
@@ -229,6 +233,7 @@
 - `(tenant_id, subscription_id) -> subscription(tenant_id, id)` (nullable)
 
 **Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
 - `UNIQUE (tenant_id, invoice_number)` (required)
 
 **Key indexes**
@@ -305,6 +310,7 @@
 - `(tenant_id, customer_id) -> customer(tenant_id, id)`
 
 **Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
 - Optional external idempotency: `UNIQUE (tenant_id, payment_reference)` where `payment_reference IS NOT NULL`
 
 **Key indexes**

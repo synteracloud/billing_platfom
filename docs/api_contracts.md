@@ -586,6 +586,35 @@ Response:
 
 ---
 
+
+## 4.10 Tenants
+
+### GET `/tenants/me`
+- **Purpose**: Retrieve current tenant profile and billing configuration context.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Response `200`**:
+  - Tenant object: `id`, `name`, `status`, `base_currency`, `locale`, `time_zone`, `billing_settings`, `tax_settings`, `feature_entitlements`, `metadata`, `created_at`, `updated_at`.
+- **Status codes**: `200`, `401`, `403`.
+
+### PATCH `/tenants/me`
+- **Purpose**: Update mutable tenant configuration fields used by billing workflows.
+- **Auth**: Required (owner/admin).
+- **Idempotency**: Optional.
+- **Request**:
+  - `name` (string, optional)
+  - `locale` (string, optional)
+  - `time_zone` (string, optional)
+  - `billing_settings` (object, optional)
+  - `tax_settings` (object, optional)
+  - `feature_entitlements` (object, optional, policy-restricted)
+  - `metadata` (object, optional)
+- **Response `200`**:
+  - Updated tenant object.
+- **Status codes**: `200`, `400`, `401`, `403`, `409`.
+
+---
+
 ## 5) Webhooks (Placeholder)
 
 Webhook contracts are not part of Phase 1. Future versions may define:
