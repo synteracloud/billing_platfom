@@ -1,17 +1,17 @@
 # Domain Model
 
 ## 1. Domain Overview
-The billing platform is a global, multi-tenant SaaS where each tenant represents a business operating independent billing workflows. The domain centers on deterministic financial operations: tenants manage customers and products, issue invoices, receive and allocate payments, automate recurring billing through subscriptions, generate documents, and maintain auditable event trails.
+The billing platform is a global, multi-tenant SaaS where each tenant represents a business operating independent billing workflows. The domain centers on deterministic financial operations: tenants manage customers and products, execute project-based billing with time and expenses, prepare estimates, issue invoices, receive and allocate payments, automate recurring and reminder workflows, generate reports/documents, support client portal access, and maintain auditable event trails.
 
 The model is tenant-scoped by default: every business entity is owned by exactly one tenant and cannot be accessed or mutated outside that tenant boundary.
 
 ## 2. Entity Definitions
 
 ### Tenant
-**Purpose**  
+**Purpose**
 Represents a business account that uses the platform and defines the root ownership boundary for all domain data.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `name`
 - `status` (for example: active, suspended)
@@ -23,20 +23,20 @@ Represents a business account that uses the platform and defines the root owners
 - `feature_entitlements`
 - `created_at`, `updated_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Root entity; does not belong to another tenant.
 - Owns all other business entities.
 
-**Lifecycle**  
+**Lifecycle**
 Provisioned → Active → Suspended/Restricted → Deactivated.
 
 ---
 
 ### User
-**Purpose**  
+**Purpose**
 Represents a person who accesses the platform within a tenant context.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `email`
@@ -46,19 +46,19 @@ Represents a person who accesses the platform within a tenant context.
 - `last_login_at`
 - `created_at`, `updated_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant` through `tenant_id`.
 
-**Lifecycle**  
+**Lifecycle**
 Invited → Active → Disabled (optional reactivation).
 
 ---
 
 ### Customer
-**Purpose**  
+**Purpose**
 Represents a bill-to client of a tenant.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `external_reference`
@@ -73,19 +73,19 @@ Represents a bill-to client of a tenant.
 - `status` (active, archived)
 - `created_at`, `updated_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 
-**Lifecycle**  
+**Lifecycle**
 Created → Active → Archived.
 
 ---
 
 ### Product
-**Purpose**  
+**Purpose**
 Represents a product or service sold by a tenant, including pricing metadata used during invoice creation.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `sku` or `code`
@@ -98,19 +98,19 @@ Represents a product or service sold by a tenant, including pricing metadata use
 - `is_active`
 - `created_at`, `updated_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 
-**Lifecycle**  
+**Lifecycle**
 Draft/Created → Active → Retired.
 
 ---
 
 ### Invoice
-**Purpose**  
+**Purpose**
 Represents a bill issued by a tenant to a customer, with deterministic totals, tax records, and payable balance.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `customer_id`
@@ -128,20 +128,20 @@ Represents a bill issued by a tenant to a customer, with deterministic totals, t
 - `notes`
 - `created_at`, `updated_at`, `issued_at`, `voided_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 - References a `Customer` in the same tenant.
 
-**Lifecycle**  
+**Lifecycle**
 Draft → Issued → Partially Paid → Paid, with Void available from allowed pre-settlement states by policy.
 
 ---
 
 ### InvoiceLine
-**Purpose**  
+**Purpose**
 Represents a single billable line item on an invoice.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `invoice_id`
@@ -155,20 +155,20 @@ Represents a single billable line item on an invoice.
 - `line_total_minor`
 - `sort_order`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 - Belongs to exactly one `Invoice` in the same tenant.
 
-**Lifecycle**  
+**Lifecycle**
 Mutable while invoice is Draft; immutable snapshot once invoice is Issued.
 
 ---
 
 ### Payment
-**Purpose**  
+**Purpose**
 Represents money received from a customer and tracked for allocation against one or more invoices.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `customer_id`
@@ -183,20 +183,20 @@ Represents money received from a customer and tracked for allocation against one
 - `metadata` (gateway/provider references)
 - `created_at`, `updated_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 - Typically associated with one `Customer` in the same tenant.
 
-**Lifecycle**  
+**Lifecycle**
 Recorded/Pending → Settled → (optional) Refunded/Reversed with traceable adjustments.
 
 ---
 
 ### PaymentAllocation
-**Purpose**  
+**Purpose**
 Represents an allocation record linking a payment amount to a specific invoice.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `payment_id`
@@ -207,21 +207,21 @@ Represents an allocation record linking a payment amount to a specific invoice.
 - `metadata`
 - `created_at`, `updated_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 - Belongs to exactly one `Payment` in the same tenant.
 - Belongs to exactly one `Invoice` in the same tenant.
 
-**Lifecycle**  
+**Lifecycle**
 Created append-only as part of payment allocation workflow; reversals are modeled by compensating financial operations per policy.
 
 ---
 
 ### Subscription
-**Purpose**  
+**Purpose**
 Represents recurring billing configuration used to generate invoices on a schedule.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `customer_id`
@@ -235,20 +235,20 @@ Represents recurring billing configuration used to generate invoices on a schedu
 - `pricing_terms` (amounts, quantities, taxes)
 - `created_at`, `updated_at`, `canceled_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 - References one `Customer` in the same tenant.
 
-**Lifecycle**  
+**Lifecycle**
 Draft → Active → Paused/Active → Canceled or Expired.
 
 ---
 
 ### Document
-**Purpose**  
+**Purpose**
 Represents generated financial artifacts such as invoice PDFs, receipts, credit notes, and delivery formats.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `document_type` (invoice_pdf, receipt_pdf, etc.)
@@ -261,20 +261,20 @@ Represents generated financial artifacts such as invoice PDFs, receipts, credit 
 - `generated_at`
 - `created_at`
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 - Tied to a source entity within the same tenant.
 
-**Lifecycle**  
+**Lifecycle**
 Requested → Generated → Delivered/Archived (or Failed with retry).
 
 ---
 
 ### EventLog
-**Purpose**  
+**Purpose**
 Represents immutable audit/system events for financial and permission-sensitive operations.
 
-**Key attributes**  
+**Key attributes**
 - `id`
 - `tenant_id`
 - `event_type`
@@ -288,11 +288,262 @@ Represents immutable audit/system events for financial and permission-sensitive 
 - `correlation_id`
 - `idempotency_key` (optional)
 
-**Ownership (tenant-scoped)**  
+**Ownership (tenant-scoped)**
 - Belongs to exactly one `Tenant`.
 
-**Lifecycle**  
+**Lifecycle**
 Append-only and immutable after creation.
+
+### Project
+**Purpose**
+Represents a client project used for project-based billing, budget control, and profitability tracking.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `customer_id`
+- `name`
+- `code` (optional)
+- `status` (planned, active, completed, archived)
+- `billing_method` (time_and_materials, fixed_fee, milestone)
+- `budget_minor` (optional)
+- `currency`
+- `start_date`, `end_date` (optional)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to exactly one `Tenant`.
+- Typically linked to one `Customer`.
+
+**Lifecycle**
+Planned → Active → Completed/Archived.
+
+---
+
+### TimeEntry
+**Purpose**
+Represents billable or non-billable time logged against a project.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `project_id`
+- `customer_id` (denormalized optional reference)
+- `user_id`
+- `description`
+- `started_at`, `ended_at`
+- `duration_minutes`
+- `billable` (boolean)
+- `rate_minor` (optional override)
+- `currency`
+- `invoice_id` (nullable when unbilled)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant` and one `Project`.
+
+**Lifecycle**
+Logged → Reviewed → Billed/Excluded.
+
+---
+
+### Expense
+**Purpose**
+Represents project or customer expenses that may be rebilled on invoices.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `project_id` (optional)
+- `customer_id`
+- `incurred_on`
+- `description`
+- `amount_minor`
+- `currency`
+- `tax_rate_basis_points` (optional)
+- `billable` (boolean)
+- `invoice_id` (nullable when unbilled)
+- `receipt_document_id` (optional)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant`; optionally tied to a `Project`.
+
+**Lifecycle**
+Recorded → Approved → Billed/Reimbursed/Excluded.
+
+---
+
+### Estimate
+**Purpose**
+Represents a quote/estimate shared with a customer before invoice issuance.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `customer_id`
+- `project_id` (optional)
+- `estimate_number`
+- `status` (draft, sent, accepted, rejected, expired, converted)
+- `issue_date`, `expiry_date`
+- `currency`
+- `subtotal_minor`, `tax_minor`, `discount_minor`, `total_minor`
+- `notes`, `terms` (optional)
+- `converted_invoice_id` (nullable)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant` and one `Customer`.
+
+**Lifecycle**
+Draft → Sent → Accepted/Rejected/Expired → Converted.
+
+---
+
+### EstimateItem
+**Purpose**
+Represents a line item attached to an estimate.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `estimate_id`
+- `product_id` (optional)
+- `description`
+- `quantity`
+- `unit_price_minor`
+- `tax_rate_basis_points` (optional)
+- `line_subtotal_minor`, `line_tax_minor`, `line_total_minor`
+- `sort_order`
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant` and one `Estimate`.
+
+**Lifecycle**
+Created → Updated → Locked on estimate acceptance/conversion.
+
+---
+
+### AutomationRule
+**Purpose**
+Defines automation behavior for reminders, recurring workflows, and trigger-based actions.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `name`
+- `status` (active, paused, archived)
+- `trigger_type` (schedule, event)
+- `trigger_config` (cron/event settings)
+- `conditions` (JSON)
+- `actions` (JSON)
+- `last_executed_at` (optional)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to exactly one `Tenant`.
+
+**Lifecycle**
+Draft/Configured → Active → Paused/Archived.
+
+---
+
+### Report
+**Purpose**
+Defines report generation configurations and execution metadata.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `report_type` (revenue, aging, cashflow, custom)
+- `name`
+- `filters` (JSON)
+- `grouping` (JSON optional)
+- `schedule` (optional)
+- `last_run_at` (optional)
+- `output_format` (json, csv, pdf)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant`.
+
+**Lifecycle**
+Defined → Generated (on-demand/scheduled) → Archived.
+
+---
+
+### Template
+**Purpose**
+Represents business template configuration presets for industry-specific onboarding.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `template_key` (freelancer, service_business, product_sales, saas)
+- `name`
+- `version`
+- `configuration` (JSON)
+- `is_default`
+- `status` (active, deprecated)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant`.
+
+**Lifecycle**
+Created → Active → Deprecated/Replaced.
+
+---
+
+### PortalUser
+**Purpose**
+Represents a customer-facing user account for the client portal.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `customer_id`
+- `email`
+- `full_name` (optional)
+- `status` (invited, active, disabled)
+- `last_login_at`
+- `auth_provider` (password, magic_link, sso)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant` and one `Customer`.
+
+**Lifecycle**
+Invited → Active → Disabled.
+
+---
+
+### SubscriptionPlan
+**Purpose**
+Defines recurring billing plan templates reusable across subscriptions.
+
+**Key attributes**
+- `id`
+- `tenant_id`
+- `name`
+- `code`
+- `description` (optional)
+- `amount_minor`
+- `currency`
+- `interval_unit` (day, week, month, year)
+- `interval_count`
+- `trial_days` (optional)
+- `status` (active, archived)
+- `created_at`, `updated_at`
+
+**Ownership (tenant-scoped)**
+- Belongs to one `Tenant`.
+
+**Lifecycle**
+Draft → Active → Archived.
+
+---
 
 ## 3. Entity Relationships
 
