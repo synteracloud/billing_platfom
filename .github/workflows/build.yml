@@ -1,0 +1,19 @@
+name: Build (Placeholder)
+
+# Placeholder CI workflow for future implementation.
+# Expected stages:
+# - install
+# - lint
+# - test
+# - build
+# - docker build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder step
+        run: echo "Define install/lint/test/build/docker build pipeline here"

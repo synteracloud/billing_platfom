@@ -1,0 +1,28 @@
+services:
+  api:
+    path: backend
+    runtime: node
+    port: 4000
+
+  frontend:
+    path: frontend
+    runtime: nextjs
+    port: 3000
+
+  worker:
+    path: backend
+    runtime: node
+    role: background-jobs
+
+  scheduler:
+    path: backend
+    runtime: node
+    role: cron
+
+databases:
+  postgres:
+    type: postgres
+
+cache:
+  redis:
+    type: redis
