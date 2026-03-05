@@ -431,6 +431,331 @@
 
 ---
 
+### 2.12 `projects`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `customer_id UUID NOT NULL`
+- `name TEXT NOT NULL`
+- `code TEXT NULL`
+- `status TEXT NOT NULL`
+- `billing_method TEXT NOT NULL`
+- `budget_minor BIGINT NULL`
+- `currency CHAR(3) NOT NULL`
+- `start_date DATE NULL`
+- `end_date DATE NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, customer_id) -> customer(tenant_id, id)`
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, customer_id)`
+- `INDEX (tenant_id, status)`
+
+---
+
+### 2.13 `time_entries`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `project_id UUID NOT NULL`
+- `customer_id UUID NULL`
+- `user_id UUID NOT NULL`
+- `invoice_id UUID NULL`
+- `description TEXT NULL`
+- `started_at TIMESTAMPTZ NOT NULL`
+- `ended_at TIMESTAMPTZ NOT NULL`
+- `duration_minutes INTEGER NOT NULL`
+- `billable BOOLEAN NOT NULL DEFAULT TRUE`
+- `rate_minor BIGINT NULL`
+- `currency CHAR(3) NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, project_id) -> projects(tenant_id, id)`
+- `(tenant_id, user_id) -> user(tenant_id, id)`
+- `(tenant_id, customer_id) -> customer(tenant_id, id)` (nullable)
+- `(tenant_id, invoice_id) -> invoice(tenant_id, id)` (nullable)
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, project_id)`
+- `INDEX (tenant_id, invoice_id)`
+- `INDEX (tenant_id, started_at DESC)`
+
+---
+
+### 2.14 `expenses`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `project_id UUID NULL`
+- `customer_id UUID NOT NULL`
+- `invoice_id UUID NULL`
+- `receipt_document_id UUID NULL`
+- `incurred_on DATE NOT NULL`
+- `description TEXT NOT NULL`
+- `amount_minor BIGINT NOT NULL`
+- `currency CHAR(3) NOT NULL`
+- `tax_rate_basis_points INTEGER NULL`
+- `billable BOOLEAN NOT NULL DEFAULT TRUE`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, project_id) -> projects(tenant_id, id)` (nullable)
+- `(tenant_id, customer_id) -> customer(tenant_id, id)`
+- `(tenant_id, invoice_id) -> invoice(tenant_id, id)` (nullable)
+- `(tenant_id, receipt_document_id) -> document(tenant_id, id)` (nullable)
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, project_id)`
+- `INDEX (tenant_id, customer_id)`
+- `INDEX (tenant_id, invoice_id)`
+
+---
+
+### 2.15 `estimates`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `customer_id UUID NOT NULL`
+- `project_id UUID NULL`
+- `converted_invoice_id UUID NULL`
+- `estimate_number TEXT NOT NULL`
+- `status TEXT NOT NULL`
+- `issue_date DATE NOT NULL`
+- `expiry_date DATE NULL`
+- `currency CHAR(3) NOT NULL`
+- `subtotal_minor BIGINT NOT NULL`
+- `tax_minor BIGINT NOT NULL`
+- `discount_minor BIGINT NOT NULL DEFAULT 0`
+- `total_minor BIGINT NOT NULL`
+- `notes TEXT NULL`
+- `terms TEXT NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, customer_id) -> customer(tenant_id, id)`
+- `(tenant_id, project_id) -> projects(tenant_id, id)` (nullable)
+- `(tenant_id, converted_invoice_id) -> invoice(tenant_id, id)` (nullable)
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, estimate_number)`
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, customer_id)`
+- `INDEX (tenant_id, status)`
+
+---
+
+### 2.16 `estimate_items`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `estimate_id UUID NOT NULL`
+- `product_id UUID NULL`
+- `description TEXT NOT NULL`
+- `quantity NUMERIC(18,6) NOT NULL`
+- `unit_price_minor BIGINT NOT NULL`
+- `tax_rate_basis_points INTEGER NULL`
+- `line_subtotal_minor BIGINT NOT NULL`
+- `line_tax_minor BIGINT NOT NULL`
+- `line_total_minor BIGINT NOT NULL`
+- `sort_order INTEGER NOT NULL DEFAULT 0`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, estimate_id) -> estimates(tenant_id, id)`
+- `(tenant_id, product_id) -> product(tenant_id, id)` (nullable)
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, estimate_id)`
+- `INDEX (tenant_id, product_id)`
+
+---
+
+### 2.17 `automation_rules`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `name TEXT NOT NULL`
+- `status TEXT NOT NULL`
+- `trigger_type TEXT NOT NULL`
+- `trigger_config JSONB NOT NULL`
+- `conditions JSONB NULL`
+- `actions JSONB NOT NULL`
+- `last_executed_at TIMESTAMPTZ NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, status)`
+- `INDEX (tenant_id, trigger_type)`
+
+---
+
+### 2.18 `reports`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `name TEXT NOT NULL`
+- `report_type TEXT NOT NULL`
+- `filters JSONB NULL`
+- `grouping JSONB NULL`
+- `schedule TEXT NULL`
+- `output_format TEXT NOT NULL`
+- `last_run_at TIMESTAMPTZ NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, report_type)`
+- `INDEX (tenant_id, last_run_at DESC)`
+
+---
+
+### 2.19 `templates`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `template_key TEXT NOT NULL`
+- `name TEXT NOT NULL`
+- `version TEXT NOT NULL`
+- `configuration JSONB NOT NULL`
+- `is_default BOOLEAN NOT NULL DEFAULT FALSE`
+- `status TEXT NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, template_key)`
+- `INDEX (tenant_id, status)`
+
+---
+
+### 2.20 `portal_users`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `customer_id UUID NOT NULL`
+- `email CITEXT NOT NULL`
+- `full_name TEXT NULL`
+- `status TEXT NOT NULL`
+- `auth_provider TEXT NOT NULL`
+- `last_login_at TIMESTAMPTZ NULL`
+- `password_hash TEXT NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, customer_id) -> customer(tenant_id, id)`
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, email)`
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, customer_id)`
+- `INDEX (tenant_id, status)`
+
+---
+
+### 2.21 `subscription_plans`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `name TEXT NOT NULL`
+- `code TEXT NOT NULL`
+- `description TEXT NULL`
+- `amount_minor BIGINT NOT NULL`
+- `currency CHAR(3) NOT NULL`
+- `interval_unit TEXT NOT NULL`
+- `interval_count INTEGER NOT NULL`
+- `trial_days INTEGER NULL`
+- `status TEXT NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, code)`
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, status)`
+
+---
+
 ## 3) Constraints and Indexes
 
 ### Global integrity constraints

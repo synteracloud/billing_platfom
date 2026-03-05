@@ -246,6 +246,42 @@ The system must deliver:
   - Immutable audit trail for financial and permission-sensitive changes.
   - Event timeline for traceability, compliance, and diagnostics.
 
+- **projects**
+  - Project-based billing context, budget tracking, and profitability attribution.
+  - Aggregates time entries and expenses into invoice-ready financial inputs.
+
+- **estimates**
+  - Pre-invoice quote/estimate lifecycle with approval and expiration controls.
+  - Supports deterministic estimate-to-invoice conversion workflows.
+
+- **automation-engine**
+  - Scheduled jobs and event-driven workflow triggers for billing operations.
+  - Powers reminders, recurring invoice generation, and policy-based automations.
+
+- **reporting-engine**
+  - Revenue reporting, invoice aging views, and operational billing analytics.
+  - Produces tenant-scoped report outputs for dashboard and exports.
+
+- **financial-intelligence-service**
+  - Forecasting, payment behavior analysis, and forward-looking revenue insights.
+  - Consumes normalized billing events while preserving module ownership boundaries.
+
+- **client-portal**
+  - Customer-facing, authenticated access for invoice and payment visibility.
+  - Exposes tenant-scoped portal views without bypassing core billing rules.
+
+- **business-templates**
+  - Industry-specific billing presets and configuration bundles.
+  - Supplies schema/config defaults for renderer-driven frontend experiences.
+
+- **integration-layer**
+  - External connectors (Stripe, PayPal), webhook processing, and accounting exports.
+  - Normalizes third-party events into internal module-safe REST workflows.
+
+V1 scope extension note:
+- The architecture remains a **multi-tenant SaaS** with **modular backend services** and a **schema-driven renderer frontend**.
+- These modules extend capabilities without changing core architectural boundaries or contract-first principles.
+
 ## 6. Data Flow
 Primary billing flow:
 1. `tenant` establishes scope and business configuration.

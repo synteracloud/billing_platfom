@@ -615,6 +615,230 @@ Response:
 
 ---
 
+## 4.11 Projects
+
+### GET `/projects`
+- **Purpose**: List tenant projects used for project-based billing and profitability tracking.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Request query**:
+  - `limit`, `cursor`, `sort`
+  - filters: `status`, `customer_id`, `billing_method`, `created_at_from`, `created_at_to`
+- **Response `200`**:
+  - Array of project objects: `id`, `customer_id`, `name`, `code`, `status`, `billing_method`, `budget_minor`, `currency`, `start_date`, `end_date`, `created_at`, `updated_at`
+- **Status codes**: `200`, `401`, `403`.
+
+### POST `/projects`
+- **Purpose**: Create a project.
+- **Auth**: Required.
+- **Idempotency**: Required.
+- **Request**:
+  - `customer_id` (uuid, required)
+  - `name` (string, required)
+  - `code` (string, optional)
+  - `status` (string, optional; default `planned`)
+  - `billing_method` (string, required)
+  - `budget_minor` (integer, optional)
+  - `currency` (string ISO-4217, required)
+  - `start_date` (date, optional)
+  - `end_date` (date, optional)
+- **Response `201`**:
+  - Created project object.
+- **Status codes**: `201`, `400`, `401`, `403`, `409`.
+
+### GET `/projects/{id}`
+- **Purpose**: Retrieve project by ID.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Response `200`**:
+  - Project object.
+- **Status codes**: `200`, `401`, `403`, `404`.
+
+---
+
+## 4.12 Time Tracking
+
+### POST `/time-entries`
+- **Purpose**: Create a time tracking entry for project/customer billing.
+- **Auth**: Required.
+- **Idempotency**: Required.
+- **Request**:
+  - `project_id` (uuid, required)
+  - `customer_id` (uuid, optional)
+  - `user_id` (uuid, optional if inferred from auth context)
+  - `description` (string, optional)
+  - `started_at` (datetime, required)
+  - `ended_at` (datetime, required)
+  - `duration_minutes` (integer, required)
+  - `billable` (boolean, optional; default `true`)
+  - `rate_minor` (integer, optional)
+  - `currency` (string ISO-4217, required)
+- **Response `201`**:
+  - Created time entry object.
+- **Status codes**: `201`, `400`, `401`, `403`, `409`.
+
+### GET `/time-entries`
+- **Purpose**: List time entries.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Request query**:
+  - `limit`, `cursor`, `sort=-started_at`
+  - filters: `project_id`, `customer_id`, `billable`, `invoice_id`, `started_at_from`, `started_at_to`
+- **Response `200`**:
+  - Array of time entry objects: `id`, `project_id`, `customer_id`, `user_id`, `description`, `started_at`, `ended_at`, `duration_minutes`, `billable`, `rate_minor`, `currency`, `invoice_id`, `created_at`, `updated_at`
+- **Status codes**: `200`, `401`, `403`.
+
+---
+
+## 4.13 Estimates
+
+### GET `/estimates`
+- **Purpose**: List customer estimates/quotes.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Request query**:
+  - `limit`, `cursor`, `sort=-issue_date`
+  - filters: `status`, `customer_id`, `project_id`, `issue_date_from`, `issue_date_to`, `expiry_date_from`, `expiry_date_to`
+- **Response `200`**:
+  - Array of estimate objects: `id`, `estimate_number`, `customer_id`, `project_id`, `status`, `issue_date`, `expiry_date`, `currency`, `subtotal_minor`, `tax_minor`, `discount_minor`, `total_minor`, `converted_invoice_id`, `created_at`, `updated_at`
+- **Status codes**: `200`, `401`, `403`.
+
+### POST `/estimates`
+- **Purpose**: Create an estimate.
+- **Auth**: Required.
+- **Idempotency**: Required.
+- **Request**:
+  - `customer_id` (uuid, required)
+  - `project_id` (uuid, optional)
+  - `issue_date` (date, required)
+  - `expiry_date` (date, optional)
+  - `currency` (string ISO-4217, required)
+  - `line_items` (array, required) with per-item fields: `product_id` (optional), `description` (required), `quantity` (required), `unit_price_minor` (required), `tax_rate_basis_points` (optional)
+  - `notes` (string, optional)
+  - `terms` (string, optional)
+- **Response `201`**:
+  - Created estimate object with items.
+- **Status codes**: `201`, `400`, `401`, `403`, `409`.
+
+### POST `/estimates/{id}/convert`
+- **Purpose**: Convert an accepted estimate into an invoice.
+- **Auth**: Required.
+- **Idempotency**: Required.
+- **Request**:
+  - `issue_date` (date, optional)
+  - `due_date` (date, optional)
+  - `invoice_overrides` (object, optional)
+- **Response `201`**:
+  - Created invoice object and conversion metadata.
+- **Status codes**: `201`, `400`, `401`, `403`, `404`, `409`, `422`.
+
+---
+
+## 4.14 Reports
+
+### GET `/reports/revenue`
+- **Purpose**: Generate revenue report output for a tenant.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Request query**:
+  - `period_from`, `period_to` (date, required)
+  - `group_by` (optional; e.g., `month`, `customer`, `product`)
+  - `currency` (optional)
+- **Response `200`**:
+  - Revenue metrics and grouped totals payload.
+- **Status codes**: `200`, `400`, `401`, `403`.
+
+### GET `/reports/aging`
+- **Purpose**: Generate invoice aging report.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Request query**:
+  - `as_of_date` (date, optional; default today)
+  - `customer_id` (optional)
+- **Response `200`**:
+  - Aging buckets and invoice-level balances.
+- **Status codes**: `200`, `400`, `401`, `403`.
+
+### GET `/reports/cashflow`
+- **Purpose**: Generate cash flow reporting output with historical/forecast view.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Request query**:
+  - `period_from`, `period_to` (date, required)
+  - `include_forecast` (boolean, optional)
+- **Response `200`**:
+  - Cash in/out aggregates and projected balance trends.
+- **Status codes**: `200`, `400`, `401`, `403`.
+
+---
+
+## 4.15 Portal
+
+### POST `/portal/login`
+- **Purpose**: Authenticate a portal user for customer-facing invoice/payment access.
+- **Auth**: Not required.
+- **Idempotency**: Not required.
+- **Request**:
+  - `email` (string, required)
+  - `password` or `magic_token` (string, required based on auth provider)
+- **Response `200`**:
+  - `access_token`, `token_type`, `expires_in`, and minimal portal user profile.
+- **Status codes**: `200`, `401`, `423`, `429`.
+
+### GET `/portal/invoices`
+- **Purpose**: List invoices visible to the authenticated portal user.
+- **Auth**: Required (portal session).
+- **Idempotency**: N/A.
+- **Request query**:
+  - `limit`, `cursor`, `sort=-issue_date`
+  - filters: `status`, `issue_date_from`, `issue_date_to`
+- **Response `200`**:
+  - Array of invoice summaries: `id`, `invoice_number`, `issue_date`, `due_date`, `status`, `currency`, `total_minor`, `amount_due_minor`, `pdf_url`.
+- **Status codes**: `200`, `401`, `403`.
+
+### GET `/portal/payments`
+- **Purpose**: List payments made by/for the portal user customer account.
+- **Auth**: Required (portal session).
+- **Idempotency**: N/A.
+- **Request query**:
+  - `limit`, `cursor`, `sort=-received_at`
+  - filters: `status`, `received_at_from`, `received_at_to`
+- **Response `200`**:
+  - Array of payment summaries: `id`, `reference`, `method`, `status`, `currency`, `amount_received_minor`, `received_at`.
+- **Status codes**: `200`, `401`, `403`.
+
+---
+
+## 4.16 Automation
+
+### POST `/automation/rules`
+- **Purpose**: Create an automation rule for reminders or workflow triggers.
+- **Auth**: Required.
+- **Idempotency**: Required.
+- **Request**:
+  - `name` (string, required)
+  - `status` (string, optional; default `active`)
+  - `trigger_type` (string, required)
+  - `trigger_config` (object, required)
+  - `conditions` (object, optional)
+  - `actions` (array/object, required)
+- **Response `201`**:
+  - Created automation rule object.
+- **Status codes**: `201`, `400`, `401`, `403`, `409`.
+
+### GET `/automation/rules`
+- **Purpose**: List automation rules.
+- **Auth**: Required.
+- **Idempotency**: N/A.
+- **Request query**:
+  - `limit`, `cursor`, `sort=-updated_at`
+  - filters: `status`, `trigger_type`, `created_at_from`, `created_at_to`
+- **Response `200`**:
+  - Array of automation rule objects: `id`, `name`, `status`, `trigger_type`, `trigger_config`, `conditions`, `actions`, `last_executed_at`, `created_at`, `updated_at`
+- **Status codes**: `200`, `401`, `403`.
+
+---
+
 ## 5) Webhooks (Placeholder)
 
 Webhook contracts are not part of Phase 1. Future versions may define:
