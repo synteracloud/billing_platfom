@@ -1,0 +1,20 @@
+name: Deploy (Placeholder)
+
+# Placeholder CD workflow for future implementation.
+# Expected stages:
+# - install
+# - lint
+# - test
+# - build
+# - docker build
+# - deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder step
+        run: echo "Define deployment pipeline and environment promotion here"
