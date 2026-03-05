@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: billing-api
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    plan: free
+
+  - type: web
+    name: billing-frontend
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    plan: free
+
+  - type: worker
+    name: billing-worker
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run worker
+    plan: free
+
+databases:
+  - name: billing-db
+    plan: free

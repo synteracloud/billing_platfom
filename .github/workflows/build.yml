@@ -1,19 +1,52 @@
-name: Build (Placeholder)
-
-# Placeholder CI workflow for future implementation.
-# Expected stages:
-# - install
-# - lint
-# - test
-# - build
-# - docker build
+name: Build
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  placeholder:
+  ci:
     runs-on: ubuntu-latest
     steps:
-      - name: Placeholder step
-        run: echo "Define install/lint/test/build/docker build pipeline here"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Lint backend
+        working-directory: backend
+        run: npm run lint --if-present
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint --if-present
+
+      - name: Run backend tests
+        working-directory: backend
+        run: npm test --if-present
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test --if-present
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build

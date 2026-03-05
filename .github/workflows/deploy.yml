@@ -1,20 +1,44 @@
-name: Deploy (Placeholder)
-
-# Placeholder CD workflow for future implementation.
-# Expected stages:
-# - install
-# - lint
-# - test
-# - build
-# - docker build
-# - deploy
+name: Deploy
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  placeholder:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Placeholder step
-        run: echo "Define deployment pipeline and environment promotion here"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Notify Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL is not configured" >&2
+            exit 1
+          fi
+          curl --fail --show-error --silent -X POST "$RENDER_DEPLOY_HOOK_URL"
