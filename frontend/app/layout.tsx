@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <AuthProvider>
           <AppShell topNav={<TopNav />} sidebar={<Sidebar />}>
-            {children}
+            {children as any}
           </AppShell>
         </AuthProvider>
       </body>

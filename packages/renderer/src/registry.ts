@@ -14,7 +14,7 @@ import {
 } from '../../ui/src';
 import type { ComponentType as ReactComponentType } from 'react';
 
-export type RenderComponent = ReactComponentType<Record<string, unknown>>;
+export type RenderComponent = ReactComponentType<any>;
 
 export const componentRegistry: Record<string, RenderComponent> = {
   appShell: AppShell as RenderComponent,
