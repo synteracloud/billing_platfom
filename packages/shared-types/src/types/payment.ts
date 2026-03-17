@@ -3,7 +3,8 @@ export type PaymentStatus =
   | 'pending_settlement'
   | 'settled'
   | 'failed'
-  | 'refunded';
+  | 'refunded'
+  | 'void';
 
 export interface PaymentAllocation {
   id: string;
@@ -13,7 +14,7 @@ export interface PaymentAllocation {
   allocated_minor: number;
   allocation_date: string;
   created_by_user_id?: string;
-  metadata?: Record<string, unknown>;
+  metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -22,7 +23,7 @@ export interface Payment {
   id: string;
   tenant_id: string;
   customer_id: string;
-  payment_reference: string;
+  payment_reference: string | null;
   payment_method: string;
   payment_date: string;
   currency: string;
@@ -30,7 +31,7 @@ export interface Payment {
   status: PaymentStatus;
   unallocated_minor: number;
   allocated_minor: number;
-  metadata?: Record<string, unknown>;
+  metadata: Record<string, unknown> | null;
   allocations?: PaymentAllocation[];
   created_at: string;
   updated_at: string;
