@@ -20,10 +20,11 @@ export interface Invoice {
   id: string;
   tenant_id: string;
   customer_id: string;
+  subscription_id: string | null;
   invoice_number: string;
   status: InvoiceStatus;
-  issue_date: string;
-  due_date: string;
+  issue_date: string | null;
+  due_date: string | null;
   currency: string;
   subtotal_minor: number;
   tax_minor: number;
@@ -31,10 +32,11 @@ export interface Invoice {
   total_minor: number;
   amount_paid_minor: number;
   amount_due_minor: number;
-  notes?: string;
+  notes: string | null;
   lines: InvoiceLine[];
+  metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
-  issued_at?: string;
-  voided_at?: string;
+  issued_at: string | null;
+  voided_at: string | null;
 }
