@@ -1,132 +1,74 @@
-# Canonical Financial Model
+# 00 Canonical Model
 
-This document defines the canonical entity model for the billing platform so current modules and future modules can share consistent naming, field semantics, and event contracts.
+## Purpose
+Provide one canonical vocabulary and data model used consistently by all engines.
 
-## 1) Canonical entities
+## Canonical Entities
 
-### 1.1 `invoice`
-Commercial receivable document issued to a customer.
+### Source-of-Truth Domain Entities
+1. `invoice`
+2. `invoice_line`
+3. `payment`
+4. `payment_allocation`
+5. `bill` (AP source document)
 
-Core responsibilities:
-- captures billed charges (line-level and header totals)
-- controls lifecycle states (`draft`, `issued`, `partially_paid`, `paid`, `void`)
-- acts as allocation target for payments and source for receivable projections
+### Accounting Entities (Ledger SoT)
+6. `ledger_account`
+7. `journal_entry`
+8. `journal_line`
 
-### 1.2 `payment`
-Inbound customer money movement record.
+### Integration Entities
+9. `normalized_record`
+10. `reconciliation_run`
+11. `reconciliation_result`
 
-Core responsibilities:
-- records cash intent/outcome (`recorded`, `pending_settlement`, `settled`, `failed`, `refunded`, `void`)
-- tracks total, allocated, and unallocated amounts
-- links to invoices through allocation records
+### Derived Entities (Never SoT)
+12. `receivable_position`
+13. `payable_position`
+14. `analytics_fact`
 
-### 1.3 `bill`
-Vendor-facing payable document (AP mirror of invoice).
+## Global Naming Rules
+- Persisted fields: `snake_case`.
+- Primary keys: `id` (UUID/ULID).
+- Foreign keys: `<entity>_id`.
+- Monetary fields (integer minor units): `<amount>_minor`.
+- Currency fields (ISO-4217): `currency_code`.
+- Timestamps (UTC): `<action>_at`.
+- Event names: `domain.aggregate.action.v1`.
 
-Core responsibilities:
-- captures obligations owed to vendors/suppliers
-- supports future AP workflows without overloading invoice semantics
+## Financial State Enumerations (Canonical)
 
-### 1.4 `account`
-Ledger account dimension used for postings and balances.
+### Invoice Status
+`draft | issued | partially_paid | paid | void`
 
-Core responsibilities:
-- defines chart-of-accounts identity and classification
-- provides posting destination for ledger entries
+### Payment Status
+`recorded | pending_settlement | settled | failed | refunded | void`
 
-### 1.5 `ledger_entry`
-Immutable double-entry posting line (or line group) representing financial truth.
+### Bill Status
+`draft | approved | due | partially_paid | paid | void`
 
-Core responsibilities:
-- persists debit/credit effects per account
-- references source business entity (`invoice`, `payment`, `bill`, etc.)
+## Invariants
+1. `journal_entry` is immutable once posted.
+2. For each `journal_entry`: `sum(debit_minor) = sum(credit_minor)`.
+3. `payment_allocation.allocated_minor` cannot exceed both payment unallocated amount and invoice open amount.
+4. AR/AP balances are derived and replayable from events + ledger postings.
+5. Integration records cannot mutate canonical entities directly.
 
-### 1.6 `bank_transaction`
-External bank feed or settlement transaction normalized to platform shape.
+## Relationship Model
+- `invoice 1..n invoice_line`
+- `payment 1..n payment_allocation`
+- `payment_allocation n..1 invoice`
+- `journal_entry 1..n journal_line`
+- `journal_entry` references source entity (`source_type`, `source_id`, `source_event_id`)
+- `receivable_position` derives from invoice + payment + ledger events
+- `payable_position` derives from bill + disbursement + ledger events
 
-Core responsibilities:
-- stores bank-originated movement metadata
-- supports reconciliation against `payment` and `ledger_entry`
-
-## 2) Shared fields and naming rules
-
-## 2.1 Global conventions
-- Use **snake_case** for persisted/entity keys.
-- Use `_id` suffix for references (`customer_id`, `invoice_id`).
-- Use `_at` suffix for timestamps (`created_at`, `issued_at`).
-- Use `_date` for date-only values (`due_date`, `payment_date`).
-- Use `_minor` for integer monetary amounts in minor units (`total_minor`).
-- Use explicit lifecycle fields (`status`) with domain-specific enums.
-- Use `metadata` as extensibility bag (`Record<string, unknown> | null`).
-
-## 2.2 Required shared envelope (all canonical entities)
-- `id: string`
-- `tenant_id: string`
-- `created_at: string`
-- `updated_at: string`
-- `metadata: Record<string, unknown> | null` (recommended baseline)
-
-## 2.3 Financial entity shared fields (`invoice`, `payment`, `bill`, `ledger_entry`, `bank_transaction`)
-- `currency: string` (ISO-4217)
-- `status: string` (entity-specific enum)
-- one or more normalized amount fields ending in `_minor`
-
-## 2.4 Relationship naming
-- Use direct relation ids rather than ambiguous aliases:
-  - `customer_id` (not `client_id`)
-  - `invoice_id` (not `inv_id`)
-  - `payment_id` (not `txn_id`)
-  - `account_id` (not `ledger_account`)
-
-## 3) Uniform event schema
-
-Use one event envelope across domains:
-
-```ts
-interface DomainEvent {
-  id: string;
-  tenant_id: string;
-  event_type: string;        // e.g. invoice_issued, payment_allocated
-  event_category: 'audit' | 'financial' | 'integration';
-  entity_type: string;       // invoice | payment | bill | ledger_entry | bank_transaction | ...
-  entity_id: string;
-  actor_type: 'user' | 'system';
-  actor_id: string | null;
-  occurred_at: string;       // RFC3339 timestamp
-  payload: Record<string, unknown>;
-  correlation_id: string | null;
-  idempotency_key: string | null;
-  created_at: string;
-  updated_at: string;
-}
-```
-
-Event rules:
-- `event_type` format: `<entity>_<action>` in snake_case.
-- `entity_type` must be canonical entity naming.
-- `occurred_at` is business occurrence time; `created_at` is persistence time.
-- `payload` should contain domain delta/details, not duplicate the full entity unless required.
-
-## 4) Repo alignment: existing invoice/payment models
-
-Current backend models already follow canonical snake_case and event envelope conventions, so alignment is done by field normalization in shared types (without changing storage structure).
-
-### 4.1 Invoice alignment
-- preserve `invoice` naming and lifecycle
-- normalize optional/nullability to match backend reality:
-  - `subscription_id` included
-  - `issue_date` and `due_date` allow `null`
-  - `notes`, `issued_at`, `voided_at` allow `null`
-  - `metadata` uses nullable canonical shape
-
-### 4.2 Payment alignment
-- preserve `payment` naming and allocation semantics
-- normalize to backend lifecycle and nullability:
-  - include `void` in `PaymentStatus`
-  - `payment_reference` allows `null`
-  - `metadata` uses nullable canonical shape
-
-### 4.3 Non-breaking principle
-- no table or module ownership changes in this pass
-- no unnecessary renames to existing stable fields
-- changes limited to normalization for cross-module consistency and future entity expansion (`bill`, `account`, `ledger_entry`, `bank_transaction`)
+## Cross-Document Contract
+This canonical model is normative for:
+- ownership in `00_service_map.md`
+- lifecycle in `01_system_overview.md`
+- invariants in `02_financial_model.md`
+- events in `03_event_system.md`
+- posting logic in `04_ledger_engine.md`
+- derived logic in `05_ar_ap_engine.md`
+- ingestion/reconciliation in `06_integration_reconciliation.md`
