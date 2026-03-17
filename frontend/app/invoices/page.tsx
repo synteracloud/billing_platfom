@@ -1,33 +1,6 @@
-import { invoiceEditorSchema } from '@billing-platform/renderer/schemas/invoice_editor.schema';
-import { invoicesSchema } from '@billing-platform/renderer/schemas/invoices.schema';
-import type { RendererSchema } from '@billing-platform/renderer/types/renderer-schema';
+import { invoicesWorkflowSchema } from '@billing-platform/renderer/schemas/invoices_workflow.schema';
 import { apiClient } from '@/lib/api-client';
 import { renderSchema } from '@/lib/renderer-provider';
-
-const invoicesPageSchema: RendererSchema = {
-  ...invoicesSchema,
-  id: 'invoices-workflow',
-  layout: {
-    ...invoicesSchema.layout,
-    regions: [...invoicesSchema.layout.regions, ...invoiceEditorSchema.layout.regions],
-  },
-  components: [
-    {
-      id: 'invoices-list',
-      type: 'table',
-      component: 'table',
-      props: {
-        rowsBinding: 'invoices.list',
-        columns: ['invoiceNumber', 'customer', 'issueDate', 'dueDate', 'total', 'status'],
-      },
-    },
-    ...invoiceEditorSchema.components,
-  ],
-  dataBindings: {
-    ...invoicesSchema.dataBindings,
-    ...invoiceEditorSchema.dataBindings,
-  },
-};
 
 const fallbackData: Record<string, unknown> = {
   invoices: {
@@ -74,5 +47,5 @@ const fetchInvoicesData = async (): Promise<Record<string, unknown>> => {
 export default async function InvoicesPage() {
   const data = await fetchInvoicesData();
 
-  return renderSchema(invoicesPageSchema, data);
+  return renderSchema(invoicesWorkflowSchema, data);
 }

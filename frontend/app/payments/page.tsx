@@ -1,33 +1,6 @@
-import { paymentAllocationSchema } from '@billing-platform/renderer/schemas/payment_allocation.schema';
-import { paymentsSchema } from '@billing-platform/renderer/schemas/payments.schema';
-import type { RendererSchema } from '@billing-platform/renderer/types/renderer-schema';
+import { paymentsWorkflowSchema } from '@billing-platform/renderer/schemas/payments_workflow.schema';
 import { apiClient } from '@/lib/api-client';
 import { renderSchema } from '@/lib/renderer-provider';
-
-const paymentsPageSchema: RendererSchema = {
-  ...paymentsSchema,
-  id: 'payments-workflow',
-  layout: {
-    ...paymentsSchema.layout,
-    regions: [...paymentsSchema.layout.regions, ...paymentAllocationSchema.layout.regions],
-  },
-  components: [
-    {
-      id: 'payments-list',
-      type: 'table',
-      component: 'table',
-      props: {
-        rowsBinding: 'payments.list',
-        columns: ['paymentNumber', 'customer', 'paymentDate', 'amount', 'method', 'status'],
-      },
-    },
-    ...paymentAllocationSchema.components,
-  ],
-  dataBindings: {
-    ...paymentsSchema.dataBindings,
-    ...paymentAllocationSchema.dataBindings,
-  },
-};
 
 const fallbackData: Record<string, unknown> = {
   payments: {
@@ -79,5 +52,5 @@ const fetchPaymentsData = async (): Promise<Record<string, unknown>> => {
 export default async function PaymentsPage() {
   const data = await fetchPaymentsData();
 
-  return renderSchema(paymentsPageSchema, data);
+  return renderSchema(paymentsWorkflowSchema, data);
 }
