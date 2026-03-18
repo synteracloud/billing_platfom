@@ -92,6 +92,7 @@ export type JournalPostedPayload = {
   source_event_id: string;
   currency_code: string;
   line_count: number;
+  batch_id: string;
 };
 
 export type JournalReversedPayload = {

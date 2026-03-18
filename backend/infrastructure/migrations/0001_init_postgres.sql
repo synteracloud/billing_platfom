@@ -232,6 +232,7 @@ CREATE TABLE idempotency_key (
 CREATE TABLE journal_entry (
   id UUID PRIMARY KEY,
   tenant_id UUID NOT NULL REFERENCES tenant(id),
+  batch_id UUID NOT NULL,
   source_event_id UUID NOT NULL,
   rule_version TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -266,4 +267,5 @@ CREATE INDEX idx_payment_tenant_status ON payment (tenant_id, status);
 CREATE INDEX idx_payment_allocation_tenant_invoice ON payment_allocation (tenant_id, invoice_id);
 CREATE INDEX idx_event_log_tenant_occurred ON event_log (tenant_id, occurred_at DESC);
 CREATE INDEX idx_journal_entry_tenant_date ON journal_entry (tenant_id, entry_date DESC);
+CREATE INDEX idx_journal_entry_tenant_batch ON journal_entry (tenant_id, batch_id);
 CREATE INDEX idx_journal_line_tenant_entry ON journal_line (tenant_id, journal_entry_id);
