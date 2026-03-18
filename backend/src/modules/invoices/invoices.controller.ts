@@ -42,7 +42,7 @@ export class InvoicesController {
   @HttpCode(HttpStatus.CREATED)
   createInvoice(@Req() req: AuthenticatedRequest, @Body() body: CreateInvoiceDto): SuccessResponse<unknown> {
     return {
-      data: this.invoicesService.createInvoice(req.auth!.tenant_id, body),
+      data: this.invoicesService.createInvoice(req.auth!.tenant_id, body, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -64,7 +64,7 @@ export class InvoicesController {
     @Body() body: UpdateInvoiceDto
   ): SuccessResponse<unknown> {
     return {
-      data: this.invoicesService.updateInvoice(req.auth!.tenant_id, id, body),
+      data: this.invoicesService.updateInvoice(req.auth!.tenant_id, id, body, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -73,7 +73,7 @@ export class InvoicesController {
   @Post(':id/issue')
   issueInvoice(@Req() req: AuthenticatedRequest, @Param('id') id: string): SuccessResponse<unknown> {
     return {
-      data: this.invoicesService.issueInvoice(req.auth!.tenant_id, id),
+      data: this.invoicesService.issueInvoice(req.auth!.tenant_id, id, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -82,7 +82,7 @@ export class InvoicesController {
   @Post(':id/void')
   voidInvoice(@Req() req: AuthenticatedRequest, @Param('id') id: string): SuccessResponse<unknown> {
     return {
-      data: this.invoicesService.voidInvoice(req.auth!.tenant_id, id),
+      data: this.invoicesService.voidInvoice(req.auth!.tenant_id, id, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -95,7 +95,7 @@ export class InvoicesController {
     @Body() body: AddLineDto
   ): SuccessResponse<unknown> {
     return {
-      data: this.invoicesService.addLine(req.auth!.tenant_id, id, body),
+      data: this.invoicesService.addLine(req.auth!.tenant_id, id, body, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -109,7 +109,7 @@ export class InvoicesController {
     @Param('line_id') lineId: string
   ): SuccessResponse<unknown> {
     return {
-      data: this.invoicesService.removeLine(req.auth!.tenant_id, id, lineId),
+      data: this.invoicesService.removeLine(req.auth!.tenant_id, id, lineId, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };

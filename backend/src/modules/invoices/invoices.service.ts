@@ -24,48 +24,47 @@ export class InvoicesService {
       .map((invoice) => ({ ...invoice, lines: this.invoicesRepository.listLines(tenantId, invoice.id) }));
   }
 
-  async createInvoice(tenantId: string, data: CreateInvoiceDto): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
-    return this.transactionManager.wrapper(async () => {
-      this.ensureCustomerExists(tenantId, data.customer_id);
-      this.validateCurrency(data.currency);
+  createInvoice(tenantId: string, data: CreateInvoiceDto, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+    this.ensureCustomerExists(tenantId, data.customer_id);
+    this.validateCurrency(data.currency);
 
-      const invoice = this.invoicesRepository.create({
-        tenant_id: tenantId,
-        customer_id: data.customer_id,
-        invoice_number: data.invoice_number?.trim() || this.generateInvoiceNumber(tenantId),
-        status: 'draft',
-        issue_date: data.issue_date ?? null,
-        due_date: data.due_date ?? null,
-        currency: data.currency.trim().toUpperCase(),
-        subtotal_minor: 0,
-        tax_minor: 0,
-        discount_minor: data.discount_minor ?? 0,
-        total_minor: 0,
-        amount_paid_minor: 0,
-        amount_due_minor: 0,
-        notes: data.notes ?? null,
-        issued_at: null,
-        voided_at: null,
-        subscription_id: data.subscription_id ?? null,
-        metadata: data.metadata ?? null
-      });
+    const invoice = this.invoicesRepository.create({
+      tenant_id: tenantId,
+      customer_id: data.customer_id,
+      invoice_number: data.invoice_number?.trim() || this.generateInvoiceNumber(tenantId),
+      status: 'draft',
+      issue_date: data.issue_date ?? null,
+      due_date: data.due_date ?? null,
+      currency: data.currency.trim().toUpperCase(),
+      subtotal_minor: 0,
+      tax_minor: 0,
+      discount_minor: data.discount_minor ?? 0,
+      total_minor: 0,
+      amount_paid_minor: 0,
+      amount_due_minor: 0,
+      notes: data.notes ?? null,
+      issued_at: null,
+      voided_at: null,
+      subscription_id: data.subscription_id ?? null,
+      metadata: data.metadata ?? null
+    });
 
-      for (const line of data.lines ?? []) {
-        await this.addLine(tenantId, invoice.id, line);
-      }
+    for (const line of data.lines ?? []) {
+      this.addLine(tenantId, invoice.id, line);
+    }
 
-      this.eventsService.logEvent({
-        tenant_id: tenantId,
-        event_type: 'invoice_created',
-        event_category: 'financial',
-        entity_type: 'invoice',
-        entity_id: invoice.id,
-        actor_type: 'system',
-        payload: { invoice_number: invoice.invoice_number }
-      });
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      event_type: 'invoice_created',
+      event_category: 'financial',
+      entity_type: 'invoice',
+      entity_id: invoice.id,
+      actor_type: 'system',
+      payload: { invoice_number: invoice.invoice_number },
+      idempotency_key: idempotencyKey ?? null
+    });
 
-      return this.getInvoice(tenantId, invoice.id);
-    }, this.financialParticipants());
+    return this.getInvoice(tenantId, invoice.id);
   }
 
   getInvoice(tenantId: string, invoiceId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
@@ -80,10 +79,9 @@ export class InvoicesService {
     };
   }
 
-  async updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
-    return this.transactionManager.wrapper(() => {
-      const invoice = this.getInvoice(tenantId, invoiceId);
-      this.ensureDraft(invoice);
+  updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+    const invoice = this.getInvoice(tenantId, invoiceId);
+    this.ensureDraft(invoice);
 
     if (data.discount_minor !== undefined && data.discount_minor < 0) {
       throw new BadRequestException('discount_minor must be greater than or equal to 0');
@@ -105,9 +103,8 @@ export class InvoicesService {
     }, this.financialParticipants());
   }
 
-  async issueInvoice(tenantId: string, invoiceId: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
-    return this.transactionManager.wrapper(() => {
-      const invoice = this.getInvoice(tenantId, invoiceId);
+  issueInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+    const invoice = this.getInvoice(tenantId, invoiceId);
 
       if (invoice.status !== 'draft') {
         throw new ConflictException('Only draft invoices can be issued');
@@ -120,23 +117,24 @@ export class InvoicesService {
         issue_date: invoice.issue_date ?? now.slice(0, 10)
       });
 
-      this.eventsService.logEvent({
+    const issuedInvoice = this.getInvoice(tenantId, invoiceId);
+
+    this.eventsService.logEvent({
       tenant_id: tenantId,
       event_type: 'invoice_issued',
       event_category: 'financial',
       entity_type: 'invoice',
       entity_id: invoiceId,
       actor_type: 'system',
-      payload: {}
+      payload: {},
+      idempotency_key: idempotencyKey ?? null
     });
 
-      return this.getInvoice(tenantId, invoiceId);
-    }, this.financialParticipants());
+    return issuedInvoice;
   }
 
-  async voidInvoice(tenantId: string, invoiceId: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
-    return this.transactionManager.wrapper(() => {
-      const invoice = this.getInvoice(tenantId, invoiceId);
+  voidInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+    const invoice = this.getInvoice(tenantId, invoiceId);
 
       if (invoice.status === 'paid' || invoice.status === 'partially_paid') {
         throw new ConflictException('Settled invoices cannot be voided');
@@ -146,11 +144,12 @@ export class InvoicesService {
         throw new ConflictException('Invoice is already void');
       }
 
-      this.invoicesRepository.update(tenantId, invoiceId, {
-        status: 'void',
-        voided_at: new Date().toISOString(),
-        amount_due_minor: 0
-      });
+    const voidedAt = new Date().toISOString();
+    this.invoicesRepository.update(tenantId, invoiceId, {
+      status: 'void',
+      voided_at: voidedAt,
+      amount_due_minor: 0
+    });
 
       this.eventsService.logEvent({
       tenant_id: tenantId,
@@ -159,18 +158,18 @@ export class InvoicesService {
       entity_type: 'invoice',
       entity_id: invoiceId,
       actor_type: 'system',
-      payload: {}
+      payload: {},
+      idempotency_key: idempotencyKey ?? null
     });
 
       return this.getInvoice(tenantId, invoiceId);
     }, this.financialParticipants());
   }
 
-  async addLine(tenantId: string, invoiceId: string, data: AddLineDto): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
-    return this.transactionManager.wrapper(() => {
-      const invoice = this.getInvoice(tenantId, invoiceId);
-      this.ensureDraft(invoice);
-      this.validateLineData(data);
+  addLine(tenantId: string, invoiceId: string, data: AddLineDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+    const invoice = this.getInvoice(tenantId, invoiceId);
+    this.ensureDraft(invoice);
+    this.validateLineData(data);
 
       const lineSubtotal = Math.round(data.quantity * data.unit_price_minor);
       const basisPoints = data.tax_rate_basis_points ?? null;
@@ -197,10 +196,9 @@ export class InvoicesService {
     }, this.financialParticipants());
   }
 
-  async removeLine(tenantId: string, invoiceId: string, lineId: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
-    return this.transactionManager.wrapper(() => {
-      const invoice = this.getInvoice(tenantId, invoiceId);
-      this.ensureDraft(invoice);
+  removeLine(tenantId: string, invoiceId: string, lineId: string, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+    const invoice = this.getInvoice(tenantId, invoiceId);
+    this.ensureDraft(invoice);
 
       const deleted = this.invoicesRepository.deleteLine(tenantId, invoiceId, lineId);
       if (!deleted) {

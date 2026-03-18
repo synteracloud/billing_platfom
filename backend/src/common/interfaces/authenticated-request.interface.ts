@@ -10,4 +10,8 @@ export interface JwtPayload {
 
 export interface AuthenticatedRequest extends Request {
   auth?: JwtPayload;
+  idempotency?: {
+    key: string;
+    scope: string;
+  };
 }

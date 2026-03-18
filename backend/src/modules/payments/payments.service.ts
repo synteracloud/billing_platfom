@@ -28,10 +28,9 @@ export class PaymentsService {
     return this.paymentsRepository.listByTenant(tenantId).map((payment) => this.buildPaymentDetails(tenantId, payment));
   }
 
-  async createPayment(tenantId: string, data: CreatePaymentDto): Promise<PaymentDetails> {
-    return this.transactionManager.wrapper(async () => {
-      this.validateCreatePayload(data);
-      this.customersService.getCustomer(tenantId, data.customer_id);
+  createPayment(tenantId: string, data: CreatePaymentDto, idempotencyKey?: string): PaymentDetails {
+    this.validateCreatePayload(data);
+    this.customersService.getCustomer(tenantId, data.customer_id);
 
       const payment = this.paymentsRepository.create({
       tenant_id: tenantId,
@@ -47,9 +46,9 @@ export class PaymentsService {
       metadata: data.metadata ?? null
     });
 
-      if (data.allocations && data.allocations.length > 0) {
-        await this.allocatePayment(tenantId, payment.id, { allocations: data.allocations });
-      }
+    if (data.allocations && data.allocations.length > 0) {
+      this.allocatePayment(tenantId, payment.id, { allocations: data.allocations }, idempotencyKey);
+    }
 
       this.eventsService.logEvent({
       tenant_id: tenantId,
@@ -58,7 +57,8 @@ export class PaymentsService {
       entity_type: 'payment',
       entity_id: payment.id,
       actor_type: 'system',
-      payload: { amount_received_minor: payment.amount_received_minor }
+      payload: { amount_received_minor: payment.amount_received_minor },
+      idempotency_key: idempotencyKey ?? null
     });
 
       return this.getPayment(tenantId, payment.id);
@@ -74,10 +74,9 @@ export class PaymentsService {
     return this.buildPaymentDetails(tenantId, payment);
   }
 
-  async allocatePayment(tenantId: string, paymentId: string, data: AllocatePaymentDto): Promise<PaymentDetails> {
-    return this.transactionManager.wrapper(() => {
-      const payment = this.requireAllocatablePayment(tenantId, paymentId);
-      this.validateAllocatePayload(data);
+  allocatePayment(tenantId: string, paymentId: string, data: AllocatePaymentDto, idempotencyKey?: string): PaymentDetails {
+    const payment = this.requireAllocatablePayment(tenantId, paymentId);
+    this.validateAllocatePayload(data);
 
       const alreadyAllocated = this.paymentsRepository.sumAllocatedForPayment(tenantId, paymentId);
       const requestedTotal = data.allocations.reduce((sum, item) => sum + item.allocated_minor, 0);
@@ -120,19 +119,19 @@ export class PaymentsService {
       entity_type: 'payment',
       entity_id: paymentId,
       actor_type: 'system',
-      payload: { allocations: data.allocations.length }
+      payload: { allocations: data.allocations.length },
+      idempotency_key: idempotencyKey ?? null
     });
 
       return this.getPayment(tenantId, paymentId);
     }, this.financialParticipants());
   }
 
-  async voidPayment(tenantId: string, paymentId: string): Promise<PaymentDetails> {
-    return this.transactionManager.wrapper(() => {
-      const payment = this.getPaymentRecord(tenantId, paymentId);
-      if (payment.status === 'void') {
-        return this.getPayment(tenantId, paymentId);
-      }
+  voidPayment(tenantId: string, paymentId: string, idempotencyKey?: string): PaymentDetails {
+    const payment = this.getPaymentRecord(tenantId, paymentId);
+    if (payment.status === 'void') {
+      return this.getPayment(tenantId, paymentId);
+    }
 
       const removedAllocations = this.paymentsRepository.deleteAllocationsByPayment(tenantId, paymentId);
       this.paymentsRepository.update(tenantId, paymentId, {
@@ -153,7 +152,8 @@ export class PaymentsService {
       entity_type: 'payment',
       entity_id: paymentId,
       actor_type: 'system',
-      payload: {}
+      payload: {},
+      idempotency_key: idempotencyKey ?? null
     });
 
       return this.getPayment(tenantId, paymentId);

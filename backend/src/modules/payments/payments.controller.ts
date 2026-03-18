@@ -31,7 +31,7 @@ export class PaymentsController {
   @HttpCode(HttpStatus.CREATED)
   createPayment(@Req() req: AuthenticatedRequest, @Body() body: CreatePaymentDto): SuccessResponse<unknown> {
     return {
-      data: this.paymentsService.createPayment(req.auth!.tenant_id, body),
+      data: this.paymentsService.createPayment(req.auth!.tenant_id, body, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -53,7 +53,7 @@ export class PaymentsController {
     @Body() body: AllocatePaymentDto
   ): SuccessResponse<unknown> {
     return {
-      data: this.paymentsService.allocatePayment(req.auth!.tenant_id, id, body),
+      data: this.paymentsService.allocatePayment(req.auth!.tenant_id, id, body, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -62,7 +62,7 @@ export class PaymentsController {
   @Post(':id/void')
   voidPayment(@Req() req: AuthenticatedRequest, @Param('id') id: string): SuccessResponse<unknown> {
     return {
-      data: this.paymentsService.voidPayment(req.auth!.tenant_id, id),
+      data: this.paymentsService.voidPayment(req.auth!.tenant_id, id, req.idempotency?.key),
       meta: { request_id: this.getRequestId() },
       error: null
     };
