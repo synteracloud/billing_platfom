@@ -114,6 +114,8 @@ export class InvoicesService {
       issue_date: invoice.issue_date ?? now.slice(0, 10)
     });
 
+    const issuedInvoice = this.getInvoice(tenantId, invoiceId);
+
     this.eventsService.logEvent({
       tenant_id: tenantId,
       event_type: 'invoice_issued',
@@ -125,7 +127,7 @@ export class InvoicesService {
       idempotency_key: idempotencyKey ?? null
     });
 
-    return this.getInvoice(tenantId, invoiceId);
+    return issuedInvoice;
   }
 
   voidInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
@@ -139,9 +141,10 @@ export class InvoicesService {
       throw new ConflictException('Invoice is already void');
     }
 
+    const voidedAt = new Date().toISOString();
     this.invoicesRepository.update(tenantId, invoiceId, {
       status: 'void',
-      voided_at: new Date().toISOString(),
+      voided_at: voidedAt,
       amount_due_minor: 0
     });
 
