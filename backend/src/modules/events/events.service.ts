@@ -17,6 +17,10 @@ export class EventsService {
     return this.eventsRepository.listByTenant(tenantId, query);
   }
 
+  getEvent(tenantId: string, eventId: string): DomainEvent | undefined {
+    return this.eventsRepository.findById(tenantId, eventId);
+  }
+
   logEvent<TEventType extends DomainEventType>(input: CreateDomainEventInput<TEventType>): DomainEvent<TEventType> {
     this.validateCreateInput(input);
 
@@ -27,7 +31,7 @@ export class EventsService {
     });
 
     validateDomainEvent(event);
-    return this.eventsRepository.create(event);
+    return this.eventsRepository.create(event) as DomainEvent<TEventType>;
   }
 
   consumeEventOnce<T>(
