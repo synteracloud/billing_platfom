@@ -1,127 +1,90 @@
-import { ConflictException, Injectable } from '@nestjs/common';
-import { createHash } from 'crypto';
-import { JournalEntryDetails, JournalEntryEntity, JournalLineEntity } from './entities/journal-entry.entity';
+import { Injectable } from '@nestjs/common';
+import { JournalEntryEntity } from './entities/journal-entry.entity';
+import { JournalLineEntity } from './entities/journal-line.entity';
 
 @Injectable()
 export class LedgerRepository {
-  private readonly entries = new Map<string, JournalEntryEntity>();
-  private readonly lines = new Map<string, JournalLineEntity>();
-  private readonly sourceEventIndex = new Map<string, string>();
+  private readonly journalEntries = new Map<string, JournalEntryEntity>();
+  private readonly journalLines = new Map<string, JournalLineEntity>();
   private readonly idempotencyIndex = new Map<string, string>();
 
-  findBySourceEvent(tenantId: string, sourceEventId: string, ruleVersion: number): JournalEntryDetails | undefined {
-    const existingId = this.sourceEventIndex.get(this.sourceKey(tenantId, sourceEventId, ruleVersion));
+  findBySourceEvent(tenantId: string, sourceEventId: string, ruleVersion: string): (JournalEntryEntity & { lines: JournalLineEntity[] }) | undefined {
+    const existingId = this.idempotencyIndex.get(this.toIdempotencyKey(tenantId, sourceEventId, ruleVersion));
     if (!existingId) {
       return undefined;
     }
 
-    return this.getById(tenantId, existingId);
+    return this.findById(tenantId, existingId);
   }
 
-  findByIdempotencyKey(tenantId: string, idempotencyKey: string): JournalEntryDetails | undefined {
-    const existingId = this.idempotencyIndex.get(this.idempotencyKey(tenantId, idempotencyKey));
-    if (!existingId) {
-      return undefined;
-    }
-
-    return this.getById(tenantId, existingId);
-  }
-
-  getById(tenantId: string, journalEntryId: string): JournalEntryDetails | undefined {
-    const entry = this.entries.get(journalEntryId);
+  findById(tenantId: string, journalEntryId: string): (JournalEntryEntity & { lines: JournalLineEntity[] }) | undefined {
+    const entry = this.journalEntries.get(journalEntryId);
     if (!entry || entry.tenant_id !== tenantId) {
       return undefined;
     }
 
     return {
       ...entry,
-      lines: [...this.lines.values()]
-        .filter((line) => line.tenant_id === tenantId && line.journal_entry_id === journalEntryId)
-        .sort((a, b) => a.id.localeCompare(b.id))
+      lines: this.listLines(tenantId, journalEntryId)
     };
   }
 
-  create(input: Omit<JournalEntryDetails, 'created_at'>): JournalEntryDetails {
-    const sourceKey = this.sourceKey(input.tenant_id, input.source_event_id, input.rule_version);
-    const existingForSource = this.sourceEventIndex.get(sourceKey);
-    if (existingForSource) {
-      const existing = this.getById(input.tenant_id, existingForSource);
-      if (existing) {
-        return existing;
-      }
+  create(entry: JournalEntryEntity, lines: JournalLineEntity[]): JournalEntryEntity & { lines: JournalLineEntity[] } {
+    this.journalEntries.set(entry.id, { ...entry });
+    this.idempotencyIndex.set(this.toIdempotencyKey(entry.tenant_id, entry.source_event_id, entry.rule_version), entry.id);
+
+    for (const line of lines) {
+      this.journalLines.set(line.id, { ...line });
     }
 
-    const idempotencyKey = this.idempotencyKey(input.tenant_id, input.idempotency_key);
-    const existingForIdempotency = this.idempotencyIndex.get(idempotencyKey);
-    if (existingForIdempotency) {
-      const existing = this.getById(input.tenant_id, existingForIdempotency);
-      if (existing) {
-        if (existing.source_event_id !== input.source_event_id || existing.rule_version !== input.rule_version) {
-          throw new ConflictException('Unique constraint violation for (tenant_id, idempotency_key)');
-        }
+    return {
+      ...entry,
+      lines: this.listLines(entry.tenant_id, entry.id)
+    };
+  }
 
-        return existing;
-      }
-    }
-
-    const createdAt = new Date().toISOString();
-    const entry: JournalEntryEntity = { ...input, created_at: createdAt };
-    this.entries.set(entry.id, entry);
-    this.sourceEventIndex.set(sourceKey, entry.id);
-    this.idempotencyIndex.set(idempotencyKey, entry.id);
-
-    for (const line of input.lines) {
-      this.lines.set(line.id, { ...line, created_at: createdAt });
-    }
-
-    return this.getById(entry.tenant_id, entry.id)!;
+  listLines(tenantId: string, journalEntryId: string): JournalLineEntity[] {
+    return [...this.journalLines.values()]
+      .filter((line) => line.tenant_id === tenantId && line.journal_entry_id === journalEntryId)
+      .sort((left, right) => left.line_number - right.line_number)
+      .map((line) => ({ ...line }));
   }
 
   createSnapshot(): {
-    entries: Map<string, JournalEntryEntity>;
-    lines: Map<string, JournalLineEntity>;
-    sourceEventIndex: Map<string, string>;
+    journalEntries: Map<string, JournalEntryEntity>;
+    journalLines: Map<string, JournalLineEntity>;
     idempotencyIndex: Map<string, string>;
   } {
     return {
-      entries: new Map([...this.entries.entries()].map(([id, entry]) => [id, this.clone(entry)])),
-      lines: new Map([...this.lines.entries()].map(([id, line]) => [id, this.clone(line)])),
-      sourceEventIndex: new Map(this.sourceEventIndex.entries()),
+      journalEntries: new Map([...this.journalEntries.entries()].map(([id, entry]) => [id, { ...entry }])),
+      journalLines: new Map([...this.journalLines.entries()].map(([id, line]) => [id, { ...line }])),
       idempotencyIndex: new Map(this.idempotencyIndex.entries())
     };
   }
 
   restoreSnapshot(snapshot: {
-    entries: Map<string, JournalEntryEntity>;
-    lines: Map<string, JournalLineEntity>;
-    sourceEventIndex: Map<string, string>;
+    journalEntries: Map<string, JournalEntryEntity>;
+    journalLines: Map<string, JournalLineEntity>;
     idempotencyIndex: Map<string, string>;
   }): void {
-    this.entries.clear();
-    this.lines.clear();
-    this.sourceEventIndex.clear();
+    this.journalEntries.clear();
+    this.journalLines.clear();
     this.idempotencyIndex.clear();
 
-    snapshot.entries.forEach((entry, id) => this.entries.set(id, this.clone(entry)));
-    snapshot.lines.forEach((line, id) => this.lines.set(id, this.clone(line)));
-    snapshot.sourceEventIndex.forEach((value, key) => this.sourceEventIndex.set(key, value));
-    snapshot.idempotencyIndex.forEach((value, key) => this.idempotencyIndex.set(key, value));
+    for (const [id, entry] of snapshot.journalEntries.entries()) {
+      this.journalEntries.set(id, { ...entry });
+    }
+
+    for (const [id, line] of snapshot.journalLines.entries()) {
+      this.journalLines.set(id, { ...line });
+    }
+
+    for (const [key, entryId] of snapshot.idempotencyIndex.entries()) {
+      this.idempotencyIndex.set(key, entryId);
+    }
   }
 
-  private sourceKey(tenantId: string, sourceEventId: string, ruleVersion: number): string {
+  private toIdempotencyKey(tenantId: string, sourceEventId: string, ruleVersion: string): string {
     return `${tenantId}::${sourceEventId}::${ruleVersion}`;
   }
-
-  private idempotencyKey(tenantId: string, idempotencyKey: string): string {
-    return `${tenantId}::${idempotencyKey}`;
-  }
-
-  private clone<T>(value: T): T {
-    return JSON.parse(JSON.stringify(value)) as T;
-  }
-}
-
-export function createDeterministicLedgerId(parts: string[]): string {
-  const hash = createHash('sha256').update(parts.join('::')).digest('hex').slice(0, 32);
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }

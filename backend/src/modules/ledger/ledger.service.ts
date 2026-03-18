@@ -1,163 +1,213 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
-import { DomainEvent } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
-import { LedgerRepository, createDeterministicLedgerId } from './ledger.repository';
-import { JournalEntryDetails } from './entities/journal-entry.entity';
+import { JournalEntryEntity } from './entities/journal-entry.entity';
+import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
+import { LedgerRepository } from './ledger.repository';
+
+const SUPPORTED_EVENT_NAMES = new Set([
+  'billing.invoice.issued.v1',
+  'billing.payment.settled.v1',
+  'billing.payment.refunded.v1',
+  'billing.bill.approved.v1',
+  'billing.bill.paid.v1'
+]);
+
+export interface PostingLineInput {
+  account_code: string;
+  account_name: string;
+  direction: JournalLineDirection;
+  amount_minor: number;
+  currency_code: string;
+}
+
+export interface PostingTransactionInput {
+  tenant_id: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  event_name: string;
+  rule_version: string;
+  entry_date: string;
+  currency_code: string;
+  description?: string | null;
+  entries: PostingLineInput[];
+}
 
 @Injectable()
 export class LedgerService {
   constructor(
-    private readonly eventsService: EventsService,
     private readonly ledgerRepository: LedgerRepository,
+    private readonly eventsService: EventsService,
     private readonly transactionManager: FinancialTransactionManager
   ) {}
 
-  async postEvent(tenantId: string, eventId: string, requestIdempotencyKey?: string, ruleVersion = 1): Promise<JournalEntryDetails> {
+  post(transaction: PostingTransactionInput): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
     return this.transactionManager.wrapper(() => {
-      const sourceEvent = this.eventsService.getEvent(tenantId, eventId);
-      if (!sourceEvent) {
-        throw new NotFoundException('Source event not found');
-      }
-
-      this.ensureSupported(sourceEvent);
-      const effectiveIdempotencyKey = requestIdempotencyKey?.trim() || `journal-post:${sourceEvent.id}:${ruleVersion}`;
-
-      const existing = this.ledgerRepository.findBySourceEvent(tenantId, sourceEvent.id, ruleVersion);
+      const normalized = this.validateAndNormalize(transaction);
+      const existing = this.ledgerRepository.findBySourceEvent(
+        normalized.tenant_id,
+        normalized.source_event_id,
+        normalized.rule_version
+      );
       if (existing) {
         return existing;
       }
 
-      const duplicateByKey = this.ledgerRepository.findByIdempotencyKey(tenantId, effectiveIdempotencyKey);
-      if (duplicateByKey) {
-        if (duplicateByKey.source_event_id !== sourceEvent.id || duplicateByKey.rule_version !== ruleVersion) {
-          throw new BadRequestException('idempotency key is already bound to a different posting request');
-        }
+      const journalEntryId = this.createDeterministicId('journal-entry', normalized.tenant_id, normalized.source_event_id, normalized.rule_version);
+      const lines = normalized.entries.map((line, index) => ({
+        id: this.createDeterministicId('journal-line', journalEntryId, String(index + 1)),
+        tenant_id: normalized.tenant_id,
+        journal_entry_id: journalEntryId,
+        line_number: index + 1,
+        account_code: line.account_code,
+        account_name: line.account_name,
+        direction: line.direction,
+        amount_minor: line.amount_minor,
+        currency_code: line.currency_code,
+        created_at: normalized.created_at
+      }));
 
-        return duplicateByKey;
-      }
+      const entry: JournalEntryEntity = {
+        id: journalEntryId,
+        tenant_id: normalized.tenant_id,
+        source_type: normalized.source_type,
+        source_id: normalized.source_id,
+        source_event_id: normalized.source_event_id,
+        event_name: normalized.event_name,
+        rule_version: normalized.rule_version,
+        entry_date: normalized.entry_date,
+        currency_code: normalized.currency_code,
+        description: normalized.description,
+        created_at: normalized.created_at
+      };
 
-      const journalEntry = this.buildJournalEntry(sourceEvent, effectiveIdempotencyKey, ruleVersion);
-      const created = this.ledgerRepository.create(journalEntry);
-
+      const created = this.ledgerRepository.create(entry, lines);
       this.eventsService.logEvent({
-        tenant_id: tenantId,
+        tenant_id: normalized.tenant_id,
         type: 'accounting.journal.posted.v1',
         aggregate_type: 'journal_entry',
         aggregate_id: created.id,
         aggregate_version: 1,
-        idempotency_key: `journal-event:${sourceEvent.id}:${ruleVersion}`,
-        causation_id: sourceEvent.id,
-        correlation_id: sourceEvent.correlation_id,
+        idempotency_key: `accounting.journal.posted.v1:${normalized.source_event_id}:${normalized.rule_version}`,
         payload: {
           journal_entry_id: created.id,
-          source_type: sourceEvent.type,
-          source_id: sourceEvent.aggregate_id,
-          source_event_id: sourceEvent.id,
+          source_type: created.source_type,
+          source_id: created.source_id,
+          source_event_id: created.source_event_id,
           currency_code: created.currency_code,
-          line_count: created.line_count
+          line_count: created.lines.length
         }
       });
 
       return created;
-    }, this.financialParticipants());
+    }, this.transactionParticipants());
   }
 
-  private ensureSupported(event: DomainEvent): void {
-    if (!['billing.invoice.issued.v1', 'billing.payment.settled.v1', 'billing.payment.refunded.v1'].includes(event.type)) {
-      throw new BadRequestException(`No posting rule for event type ${event.type}`);
+  getJournalEntry(tenantId: string, journalEntryId: string): (JournalEntryEntity & { lines: JournalLineEntity[] }) | undefined {
+    return this.ledgerRepository.findById(tenantId, journalEntryId);
+  }
+
+  private validateAndNormalize(transaction: PostingTransactionInput): PostingTransactionInput & { created_at: string; description: string | null } {
+    if (!transaction.tenant_id?.trim()) {
+      throw new BadRequestException('tenant_id is required');
     }
-  }
 
-  private buildJournalEntry(event: DomainEvent, idempotencyKey: string, ruleVersion: number): JournalEntryDetails {
-    const currencyCode = this.currencyForEvent(event);
-    const amountMinor = this.amountForEvent(event);
-    const entryId = createDeterministicLedgerId([event.tenant_id, event.id, String(ruleVersion)]);
-    const lineSeed = [event.tenant_id, event.id, String(ruleVersion), currencyCode, String(amountMinor)];
-    const accounts = this.accountsForEvent(event);
-    const occurredDate = event.occurred_at.slice(0, 10);
+    if (!transaction.source_type?.trim() || !transaction.source_id?.trim() || !transaction.source_event_id?.trim()) {
+      throw new BadRequestException('source_type, source_id, and source_event_id are required');
+    }
+
+    if (!SUPPORTED_EVENT_NAMES.has(transaction.event_name)) {
+      throw new BadRequestException(`Unsupported event_name: ${transaction.event_name}`);
+    }
+
+    if (!transaction.rule_version?.trim()) {
+      throw new BadRequestException('rule_version is required');
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(transaction.entry_date)) {
+      throw new BadRequestException('entry_date must be in YYYY-MM-DD format');
+    }
+
+    if (!transaction.currency_code?.trim()) {
+      throw new BadRequestException('currency_code is required');
+    }
+
+    if (!Array.isArray(transaction.entries) || transaction.entries.length < 2) {
+      throw new BadRequestException('entries must contain at least two lines');
+    }
+
+    const entries = transaction.entries.map((entry) => {
+      if (!entry.account_code?.trim() || !entry.account_name?.trim()) {
+        throw new BadRequestException('Each entry must include account_code and account_name');
+      }
+
+      if (!Number.isInteger(entry.amount_minor) || entry.amount_minor < 0) {
+        throw new BadRequestException('Each entry amount_minor must be an integer greater than or equal to 0');
+      }
+
+      if (!entry.currency_code?.trim()) {
+        throw new BadRequestException('Each entry currency_code is required');
+      }
+
+      return {
+        account_code: entry.account_code.trim(),
+        account_name: entry.account_name.trim(),
+        direction: entry.direction,
+        amount_minor: entry.amount_minor,
+        currency_code: entry.currency_code.trim().toUpperCase()
+      };
+    });
+
+    const currencyCode = transaction.currency_code.trim().toUpperCase();
+    if (entries.some((entry) => entry.currency_code !== currencyCode)) {
+      throw new BadRequestException('All entries must use the transaction currency_code');
+    }
+
+    const debitTotal = entries.filter((entry) => entry.direction === 'debit').reduce((sum, entry) => sum + entry.amount_minor, 0);
+    const creditTotal = entries.filter((entry) => entry.direction === 'credit').reduce((sum, entry) => sum + entry.amount_minor, 0);
+
+    if (debitTotal !== creditTotal) {
+      throw new BadRequestException('Unbalanced posting: debit total must equal credit total');
+    }
+
+    if (debitTotal === 0) {
+      throw new BadRequestException('Posting total must be greater than zero');
+    }
 
     return {
-      id: entryId,
-      tenant_id: event.tenant_id,
-      source_event_id: event.id,
-      source_event_type: event.type,
-      source_aggregate_id: event.aggregate_id,
-      rule_version: ruleVersion,
-      idempotency_key: idempotencyKey,
+      ...transaction,
+      tenant_id: transaction.tenant_id.trim(),
+      source_type: transaction.source_type.trim(),
+      source_id: transaction.source_id.trim(),
+      source_event_id: transaction.source_event_id.trim(),
+      event_name: transaction.event_name.trim(),
+      rule_version: transaction.rule_version.trim(),
+      entry_date: transaction.entry_date,
       currency_code: currencyCode,
-      entry_date: occurredDate,
-      line_count: 2,
-      lines: [
-        {
-          id: createDeterministicLedgerId([...lineSeed, 'debit']),
-          tenant_id: event.tenant_id,
-          journal_entry_id: entryId,
-          account_code: accounts.debit,
-          direction: 'debit',
-          amount_minor: amountMinor,
-          currency_code: currencyCode,
-          created_at: event.recorded_at
-        },
-        {
-          id: createDeterministicLedgerId([...lineSeed, 'credit']),
-          tenant_id: event.tenant_id,
-          journal_entry_id: entryId,
-          account_code: accounts.credit,
-          direction: 'credit',
-          amount_minor: amountMinor,
-          currency_code: currencyCode,
-          created_at: event.recorded_at
-        }
-      ],
-      created_at: event.recorded_at
+      description: transaction.description?.trim() || null,
+      entries,
+      created_at: new Date().toISOString()
     };
   }
 
-  private currencyForEvent(event: DomainEvent): string {
-    if ('currency_code' in event.payload && typeof event.payload.currency_code === 'string') {
-      return event.payload.currency_code;
-    }
-
-    throw new BadRequestException(`Event ${event.id} is missing currency_code`);
+  private createDeterministicId(...parts: string[]): string {
+    const digest = createHash('sha256').update(parts.join('::')).digest('hex');
+    return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`;
   }
 
-  private amountForEvent(event: DomainEvent): number {
-    if ('total_minor' in event.payload && typeof event.payload.total_minor === 'number') {
-      return event.payload.total_minor;
-    }
-
-    if ('amount_minor' in event.payload && typeof event.payload.amount_minor === 'number') {
-      return event.payload.amount_minor;
-    }
-
-    throw new BadRequestException(`Event ${event.id} is missing amount for posting`);
-  }
-
-  private accountsForEvent(event: DomainEvent): { debit: string; credit: string } {
-    switch (event.type) {
-      case 'billing.invoice.issued.v1':
-        return { debit: 'accounts_receivable', credit: 'revenue' };
-      case 'billing.payment.settled.v1':
-        return { debit: 'cash', credit: 'accounts_receivable' };
-      case 'billing.payment.refunded.v1':
-        return { debit: 'accounts_receivable', credit: 'cash' };
-      default:
-        throw new BadRequestException(`No posting rule for event type ${event.type}`);
-    }
-  }
-
-  private financialParticipants(): TransactionParticipant[] {
+  private transactionParticipants(): TransactionParticipant[] {
     return [
       {
-        key: 'events',
-        snapshot: () => this.eventsService.createSnapshot(),
-        restore: (snapshot) => this.eventsService.restoreSnapshot(snapshot as ReturnType<EventsService['createSnapshot']>)
-      },
-      {
-        key: 'ledger',
+        key: 'ledger.repository',
         snapshot: () => this.ledgerRepository.createSnapshot(),
         restore: (snapshot) => this.ledgerRepository.restoreSnapshot(snapshot as ReturnType<LedgerRepository['createSnapshot']>)
+      },
+      {
+        key: 'events.service',
+        snapshot: () => this.eventsService.createSnapshot(),
+        restore: (snapshot) => this.eventsService.restoreSnapshot(snapshot as ReturnType<EventsService['createSnapshot']>)
       }
     ];
   }
