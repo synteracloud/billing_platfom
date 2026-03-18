@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
+import { DatabaseModule } from './database/database.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DocumentsModule } from './modules/documents/documents.module';
@@ -14,6 +15,7 @@ import { UsersModule } from './modules/users/module';
 
 @Module({
   imports: [
+    DatabaseModule,
     TenantsModule,
     UsersModule,
     CustomersModule,
