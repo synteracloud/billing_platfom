@@ -1,17 +1,20 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { EventConsumerIdempotencyService } from '../idempotency/event-consumer-idempotency.service';
 import { QueryEventsDto } from './dto/query-events.dto';
 import { EventBusService, EventHandler, EventSubscription } from './event-bus.service';
 import { createDomainEvent, CreateDomainEventInput, DomainEvent, DomainEventType } from './entities/event.entity';
 import { EventsRepository } from './events.repository';
 import { validateDomainEvent } from './domain-event.validator';
+import { EventQueuePublisher } from './queue/event-queue.publisher';
 
 @Injectable()
 export class EventsService {
+  private readonly logger = new Logger(EventsService.name);
+
   constructor(
     private readonly eventsRepository: EventsRepository,
     private readonly eventConsumerIdempotencyService: EventConsumerIdempotencyService,
-    private readonly eventBusService: EventBusService
+    private readonly eventQueuePublisher: EventQueuePublisher
   ) {}
 
   listEvents(tenantId: string, query: QueryEventsDto): DomainEvent[] {
@@ -33,31 +36,25 @@ export class EventsService {
     });
 
     validateDomainEvent(event);
-    const persistedEvent = this.eventsRepository.create(event) as DomainEvent<TEventType>;
-    void this.eventBusService.publish(persistedEvent);
-    return persistedEvent;
-  }
-
-  publish<TEventType extends DomainEventType>(event: DomainEvent<TEventType>): Promise<void> {
-    validateDomainEvent(event);
-    return this.eventBusService.publish(event);
-  }
-
-  subscribe<TEventType extends DomainEventType>(eventType: TEventType, handler: EventHandler<TEventType>): EventSubscription {
-    return this.eventBusService.subscribe(eventType, handler);
-  }
-
-  waitForIdle(): Promise<void> {
-    return this.eventBusService.waitForIdle();
+    const storedEvent = this.eventsRepository.create(event) as DomainEvent<TEventType>;
+    void this.eventQueuePublisher.publish(storedEvent).catch((error: Error) => {
+      this.logger.error(`Failed to enqueue domain event ${storedEvent.id}: ${error.message}`);
+    });
+    return storedEvent;
   }
 
   consumeEventOnce<T>(
     tenantId: string,
     consumerName: string,
     eventId: string,
-    handler: () => Promise<T> | T
+    handler: (event: DomainEvent) => Promise<T> | T
   ): Promise<T | null> {
-    return this.eventConsumerIdempotencyService.execute(tenantId, consumerName, eventId, handler);
+    const event = this.getEvent(tenantId, eventId);
+    if (!event) {
+      throw new BadRequestException(`Event not found: ${eventId}`);
+    }
+
+    return this.eventConsumerIdempotencyService.execute(event, consumerName, () => handler(event));
   }
 
   createSnapshot(): ReturnType<EventsRepository['createSnapshot']> {
