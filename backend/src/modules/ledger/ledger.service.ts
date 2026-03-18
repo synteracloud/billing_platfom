@@ -1,6 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
+import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
+import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
+import { DomainEvent, InvoiceIssuedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
@@ -12,6 +15,37 @@ const SUPPORTED_EVENT_NAMES = new Set([
   'billing.payment.refunded.v1',
   'billing.bill.approved.v1',
   'billing.bill.paid.v1'
+]);
+
+const SYSTEM_ACCOUNT_INDEX = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((account) => [account.code, account]));
+const EVENT_REQUIRED_ACCOUNT_CODES = new Map(
+  POSTING_RULE_EXPECTATIONS.map((expectation) => [
+    expectation.eventType,
+    expectation.requiredAccounts.map((requiredAccount) => DEFAULT_CHART_OF_ACCOUNTS.find((account) => account.key === requiredAccount.key)?.code).filter(Boolean) as string[]
+  ])
+);
+
+const EVENT_DIRECTIONAL_ACCOUNT_RULES = new Map<string, Array<{ direction: JournalLineDirection; codes: string[] }>>([
+  ['billing.invoice.issued.v1', [
+    { direction: 'debit', codes: ['1100'] },
+    { direction: 'credit', codes: ['4000', '2100'] }
+  ]],
+  ['billing.payment.settled.v1', [
+    { direction: 'debit', codes: ['1000', '1010'] },
+    { direction: 'credit', codes: ['1100', '2200'] }
+  ]],
+  ['billing.payment.refunded.v1', [
+    { direction: 'debit', codes: ['5010', '1100'] },
+    { direction: 'credit', codes: ['1000'] }
+  ]],
+  ['billing.bill.approved.v1', [
+    { direction: 'debit', codes: ['5000'] },
+    { direction: 'credit', codes: ['2000'] }
+  ]],
+  ['billing.bill.paid.v1', [
+    { direction: 'debit', codes: ['2000'] },
+    { direction: 'credit', codes: ['1000'] }
+  ]]
 ]);
 
 export interface PostingLineInput {
@@ -41,7 +75,9 @@ export class LedgerService {
     private readonly ledgerRepository: LedgerRepository,
     private readonly eventsService: EventsService,
     private readonly transactionManager: FinancialTransactionManager
-  ) {}
+  ) {
+    this.validateSystemChartOfAccounts();
+  }
 
   post(transaction: PostingTransactionInput): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
     return this.transactionManager.wrapper(() => {
@@ -97,11 +133,73 @@ export class LedgerService {
           source_id: created.source_id,
           source_event_id: created.source_event_id,
           currency_code: created.currency_code,
-          line_count: created.lines.length
+          line_count: created.lines.length,
+          batch_id: created.id
         }
       });
 
       return created;
+    }, this.transactionParticipants());
+  }
+
+  postEvent(tenantId: string, eventId: string, requestIdempotencyKey?: string, ruleVersion: string | number = '1'): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    return this.transactionManager.wrapper(async () => {
+      const normalizedTenantId = tenantId.trim();
+      const normalizedRuleVersion = String(ruleVersion).trim();
+      const normalizedRequestKey = requestIdempotencyKey?.trim() || null;
+
+      if (!normalizedTenantId) {
+        throw new BadRequestException('tenant_id is required');
+      }
+
+      if (!eventId?.trim()) {
+        throw new BadRequestException('event_id is required');
+      }
+
+      if (!normalizedRuleVersion) {
+        throw new BadRequestException('rule_version is required');
+      }
+
+      if (normalizedRequestKey) {
+        const boundEntry = this.ledgerRepository.findByRequestIdempotency(normalizedTenantId, normalizedRequestKey);
+        if (boundEntry && boundEntry.source_event_id !== eventId) {
+          throw new ConflictException('request idempotency key is already bound to another event');
+        }
+
+        if (boundEntry) {
+          return boundEntry;
+        }
+      }
+
+      return this.eventsService.consumeEventOnce(normalizedTenantId, `ledger-posting:${normalizedRuleVersion}`, eventId, async () => {
+        const event = this.eventsService.getEvent(normalizedTenantId, eventId);
+        if (!event) {
+          throw new BadRequestException(`Event not found: ${eventId}`);
+        }
+
+        const existing = this.ledgerRepository.findBySourceEvent(normalizedTenantId, event.id, normalizedRuleVersion);
+        if (existing) {
+          if (normalizedRequestKey) {
+            this.ledgerRepository.bindRequestIdempotency(normalizedTenantId, normalizedRequestKey, existing.id);
+          }
+          return existing;
+        }
+
+        const created = await this.post(this.buildPostingTransaction(event, normalizedRuleVersion));
+        if (normalizedRequestKey) {
+          this.ledgerRepository.bindRequestIdempotency(normalizedTenantId, normalizedRequestKey, created.id);
+        }
+        return created;
+      }).then((result) => {
+        if (!result) {
+          const existing = this.ledgerRepository.findBySourceEvent(normalizedTenantId, eventId, normalizedRuleVersion);
+          if (!existing) {
+            throw new ConflictException('Event consumption completed without a ledger posting result');
+          }
+          return existing;
+        }
+        return result;
+      });
     }, this.transactionParticipants());
   }
 
@@ -143,16 +241,26 @@ export class LedgerService {
         throw new BadRequestException('Each entry must include account_code and account_name');
       }
 
-      if (!Number.isInteger(entry.amount_minor) || entry.amount_minor < 0) {
-        throw new BadRequestException('Each entry amount_minor must be an integer greater than or equal to 0');
+      if (entry.direction !== 'debit' && entry.direction !== 'credit') {
+        throw new BadRequestException('Each entry direction must be debit or credit');
+      }
+
+      if (!Number.isInteger(entry.amount_minor) || entry.amount_minor <= 0) {
+        throw new BadRequestException('Each entry amount_minor must be an integer greater than zero');
       }
 
       if (!entry.currency_code?.trim()) {
         throw new BadRequestException('Each entry currency_code is required');
       }
 
+      const accountCode = entry.account_code.trim();
+      const account = SYSTEM_ACCOUNT_INDEX.get(accountCode);
+      if (!account) {
+        throw new BadRequestException(`Unknown ledger account_code: ${accountCode}`);
+      }
+
       return {
-        account_code: entry.account_code.trim(),
+        account_code: accountCode,
         account_name: entry.account_name.trim(),
         direction: entry.direction,
         amount_minor: entry.amount_minor,
@@ -165,15 +273,13 @@ export class LedgerService {
       throw new BadRequestException('All entries must use the transaction currency_code');
     }
 
+    this.validateRequiredAccounts(transaction.event_name, entries);
+
     const debitTotal = entries.filter((entry) => entry.direction === 'debit').reduce((sum, entry) => sum + entry.amount_minor, 0);
     const creditTotal = entries.filter((entry) => entry.direction === 'credit').reduce((sum, entry) => sum + entry.amount_minor, 0);
 
     if (debitTotal !== creditTotal) {
       throw new BadRequestException('Unbalanced posting: debit total must equal credit total');
-    }
-
-    if (debitTotal === 0) {
-      throw new BadRequestException('Posting total must be greater than zero');
     }
 
     return {
@@ -190,6 +296,130 @@ export class LedgerService {
       entries,
       created_at: new Date().toISOString()
     };
+  }
+
+  private buildPostingTransaction(event: DomainEvent, ruleVersion: string): PostingTransactionInput {
+    const eventType = event.type as string;
+
+    switch (eventType) {
+      case 'billing.invoice.issued.v1': {
+        const payload = event.payload as InvoiceIssuedPayload;
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'invoice',
+          source_id: payload.invoice_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: payload.issue_date,
+          currency_code: payload.currency_code,
+          description: `Invoice issued ${payload.invoice_id}`,
+          entries: [
+            this.createPostingLine('1100', 'Accounts Receivable', 'debit', payload.total_minor, payload.currency_code),
+            this.createPostingLine('4000', 'Revenue', 'credit', payload.total_minor, payload.currency_code)
+          ]
+        };
+      }
+      case 'billing.payment.settled.v1': {
+        const payload = event.payload as PaymentSettledPayload;
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'payment',
+          source_id: payload.payment_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: payload.settled_at.slice(0, 10),
+          currency_code: payload.currency_code,
+          description: `Payment settled ${payload.payment_id}`,
+          entries: [
+            this.createPostingLine('1000', 'Cash', 'debit', payload.amount_minor, payload.currency_code),
+            this.createPostingLine('1100', 'Accounts Receivable', 'credit', payload.amount_minor, payload.currency_code)
+          ]
+        };
+      }
+      case 'billing.payment.refunded.v1': {
+        const payload = event.payload as PaymentRefundedPayload;
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'payment',
+          source_id: payload.payment_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: payload.refunded_at.slice(0, 10),
+          currency_code: payload.currency_code,
+          description: `Payment refunded ${payload.payment_id}`,
+          entries: [
+            this.createPostingLine('5010', 'Refund Expense', 'debit', payload.amount_minor, payload.currency_code),
+            this.createPostingLine('1000', 'Cash', 'credit', payload.amount_minor, payload.currency_code)
+          ]
+        };
+      }
+      case 'billing.bill.approved.v1':
+      case 'billing.bill.paid.v1':
+        throw new BadRequestException(`Automatic posting for ${eventType} is not yet implemented`);
+      default:
+        throw new BadRequestException(`Unsupported event_name: ${eventType}`);
+    }
+  }
+
+  private createPostingLine(accountCode: string, accountName: string, direction: JournalLineDirection, amountMinor: number, currencyCode: string): PostingLineInput {
+    return {
+      account_code: accountCode,
+      account_name: accountName,
+      direction,
+      amount_minor: amountMinor,
+      currency_code: currencyCode
+    };
+  }
+
+  private validateSystemChartOfAccounts(): void {
+    const seenKeys = new Set<string>();
+    const seenCodes = new Set<string>();
+
+    for (const account of DEFAULT_CHART_OF_ACCOUNTS) {
+      this.assertUniqueAccountField(seenKeys, account.key, 'key');
+      this.assertUniqueAccountField(seenCodes, account.code, 'code');
+    }
+
+    for (const expectation of POSTING_RULE_EXPECTATIONS) {
+      for (const requiredAccount of expectation.requiredAccounts) {
+        const account = DEFAULT_CHART_OF_ACCOUNTS.find((candidate) => candidate.key === requiredAccount.key);
+        if (!account) {
+          throw new Error(`Incomplete chart of accounts: missing required account ${requiredAccount.key}`);
+        }
+
+        if (!requiredAccount.allowedTypes.includes(account.type)) {
+          throw new Error(`Incomplete chart of accounts: account ${requiredAccount.key} has invalid type ${account.type}`);
+        }
+      }
+    }
+  }
+
+  private validateRequiredAccounts(eventName: string, entries: PostingLineInput[]): void {
+    const requiredAccountCodes = EVENT_REQUIRED_ACCOUNT_CODES.get(eventName) ?? [];
+    const entryAccountCodes = new Set(entries.map((entry) => entry.account_code));
+    const covered = requiredAccountCodes.some((code) => entryAccountCodes.has(code));
+
+    if (!covered) {
+      throw new BadRequestException(`Posting does not satisfy required accounts for ${eventName}`);
+    }
+
+    const directionalRules = EVENT_DIRECTIONAL_ACCOUNT_RULES.get(eventName) ?? [];
+    for (const rule of directionalRules) {
+      const satisfied = entries.some((entry) => entry.direction === rule.direction && rule.codes.includes(entry.account_code));
+      if (!satisfied) {
+        throw new BadRequestException(`Posting does not satisfy required accounts for ${eventName}`);
+      }
+    }
+  }
+
+  private assertUniqueAccountField(seenValues: Set<string>, value: string, fieldName: keyof AccountDefinition): void {
+    if (seenValues.has(value)) {
+      throw new Error(`Incomplete chart of accounts: duplicate account ${fieldName} ${value}`);
+    }
+    seenValues.add(value);
   }
 
   private createDeterministicId(...parts: string[]): string {
