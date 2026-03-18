@@ -810,3 +810,58 @@
   - unscoped queries are prohibited in application services,
   - row-level security (RLS) can be layered on top as a defense-in-depth control.
 
+
+
+### 2.11 `ledger_account`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `code TEXT NOT NULL`
+- `name TEXT NOT NULL`
+- `account_type TEXT NOT NULL`
+- `currency CHAR(3) NOT NULL`
+- `is_active BOOLEAN NOT NULL DEFAULT TRUE`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, id)`
+- `UNIQUE (tenant_id, code)`
+- `UNIQUE (tenant_id, id, currency)` (supports currency-safe composite foreign keys from ledger entries)
+
+### 2.12 `ledger_entries`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `account_id UUID NOT NULL`
+- `debit BIGINT NULL`
+- `credit BIGINT NULL`
+- `currency CHAR(3) NOT NULL`
+- `reference_type TEXT NOT NULL`
+- `reference_id UUID NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, account_id) -> ledger_account(tenant_id, id)`
+- `(tenant_id, account_id, currency) -> ledger_account(tenant_id, id, currency)`
+
+**Checks / invariants**
+- `num_nonnulls(debit, credit) = 1` so each row is exactly one-sided
+- positive amount check on whichever side is populated
+- immutable via `BEFORE UPDATE` and `BEFORE DELETE` triggers that always raise
+
+**Key indexes**
+- `INDEX (tenant_id, account_id, created_at DESC)`
+- `INDEX (tenant_id, reference_type, reference_id)`
