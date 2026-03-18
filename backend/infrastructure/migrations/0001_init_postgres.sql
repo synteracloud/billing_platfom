@@ -266,4 +266,6 @@ CREATE INDEX idx_payment_tenant_status ON payment (tenant_id, status);
 CREATE INDEX idx_payment_allocation_tenant_invoice ON payment_allocation (tenant_id, invoice_id);
 CREATE INDEX idx_event_log_tenant_occurred ON event_log (tenant_id, occurred_at DESC);
 CREATE INDEX idx_journal_entry_tenant_date ON journal_entry (tenant_id, entry_date DESC);
+CREATE INDEX idx_journal_entry_tenant_source_event ON journal_entry (tenant_id, source_event_id, created_at DESC);
 CREATE INDEX idx_journal_line_tenant_entry ON journal_line (tenant_id, journal_entry_id);
+CREATE INDEX idx_journal_line_tenant_account_entry ON journal_line (tenant_id, account_code, journal_entry_id);
