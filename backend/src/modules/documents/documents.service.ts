@@ -47,12 +47,18 @@ export class DocumentsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'document_generated',
-      event_category: 'financial',
-      entity_type: 'document',
-      entity_id: document.id,
-      actor_type: 'system',
-      payload: { source_entity_id: invoiceId }
+      type: 'integration.record.normalized.v1',
+      aggregate_type: 'normalized_record',
+      aggregate_id: document.id,
+      aggregate_version: 1,
+      payload: {
+        normalized_record_id: document.id,
+        source_system: 'documents',
+        source_record_id: invoiceId,
+        canonical_entity: 'invoice',
+        amount_minor: invoice.total_minor,
+        currency_code: invoice.currency
+      }
     });
 
     return document;
@@ -89,12 +95,18 @@ export class DocumentsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'document_sent',
-      event_category: 'financial',
-      entity_type: 'invoice',
-      entity_id: invoiceId,
-      actor_type: 'system',
-      payload: { to: targetEmail }
+      type: 'integration.record.normalized.v1',
+      aggregate_type: 'normalized_record',
+      aggregate_id: invoiceId,
+      aggregate_version: 2,
+      payload: {
+        normalized_record_id: invoiceId,
+        source_system: 'email',
+        source_record_id: targetEmail,
+        canonical_entity: 'invoice',
+        amount_minor: invoice.total_minor,
+        currency_code: invoice.currency
+      }
     });
 
     return response;
