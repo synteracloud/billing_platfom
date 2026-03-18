@@ -8,6 +8,10 @@ export class PaymentsRepository {
   private readonly payments = new Map<string, PaymentEntity>();
   private readonly allocations = new Map<string, PaymentAllocationEntity>();
 
+  listAll(): PaymentEntity[] {
+    return [...this.payments.values()].map((payment) => this.clone(payment));
+  }
+
   listByTenant(tenantId: string): PaymentEntity[] {
     return [...this.payments.values()]
       .filter((payment) => payment.tenant_id === tenantId)
