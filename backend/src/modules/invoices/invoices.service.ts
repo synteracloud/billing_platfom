@@ -22,7 +22,7 @@ export class InvoicesService {
       .map((invoice) => ({ ...invoice, lines: this.invoicesRepository.listLines(tenantId, invoice.id) }));
   }
 
-  createInvoice(tenantId: string, data: CreateInvoiceDto): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  createInvoice(tenantId: string, data: CreateInvoiceDto, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     this.ensureCustomerExists(tenantId, data.customer_id);
     this.validateCurrency(data.currency);
 
@@ -53,18 +53,13 @@ export class InvoicesService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      type: 'billing.invoice.created.v1',
-      aggregate_type: 'invoice',
-      aggregate_id: invoice.id,
-      aggregate_version: 1,
-      payload: {
-        invoice_id: invoice.id,
-        customer_id: invoice.customer_id,
-        invoice_number: invoice.invoice_number,
-        status: invoice.status,
-        total_minor: invoice.total_minor,
-        currency_code: invoice.currency
-      }
+      event_type: 'invoice_created',
+      event_category: 'financial',
+      entity_type: 'invoice',
+      entity_id: invoice.id,
+      actor_type: 'system',
+      payload: { invoice_number: invoice.invoice_number },
+      idempotency_key: idempotencyKey ?? null
     });
 
     return this.getInvoice(tenantId, invoice.id);
@@ -82,7 +77,7 @@ export class InvoicesService {
     };
   }
 
-  updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
     this.ensureDraft(invoice);
 
@@ -105,7 +100,7 @@ export class InvoicesService {
     return this.recalculateTotals(tenantId, invoiceId);
   }
 
-  issueInvoice(tenantId: string, invoiceId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  issueInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
 
     if (invoice.status !== 'draft') {
@@ -123,23 +118,19 @@ export class InvoicesService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      type: 'billing.invoice.issued.v1',
-      aggregate_type: 'invoice',
-      aggregate_id: invoiceId,
-      aggregate_version: 1,
-      payload: {
-        invoice_id: invoiceId,
-        issue_date: issuedInvoice.issue_date ?? now.slice(0, 10),
-        due_date: issuedInvoice.due_date,
-        total_minor: issuedInvoice.total_minor,
-        currency_code: issuedInvoice.currency
-      }
+      event_type: 'invoice_issued',
+      event_category: 'financial',
+      entity_type: 'invoice',
+      entity_id: invoiceId,
+      actor_type: 'system',
+      payload: {},
+      idempotency_key: idempotencyKey ?? null
     });
 
     return issuedInvoice;
   }
 
-  voidInvoice(tenantId: string, invoiceId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  voidInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
 
     if (invoice.status === 'paid' || invoice.status === 'partially_paid') {
@@ -159,21 +150,19 @@ export class InvoicesService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      type: 'billing.invoice.voided.v1',
-      aggregate_type: 'invoice',
-      aggregate_id: invoiceId,
-      aggregate_version: 1,
-      payload: {
-        invoice_id: invoiceId,
-        voided_at: voidedAt,
-        reason: null
-      }
+      event_type: 'invoice_voided',
+      event_category: 'financial',
+      entity_type: 'invoice',
+      entity_id: invoiceId,
+      actor_type: 'system',
+      payload: {},
+      idempotency_key: idempotencyKey ?? null
     });
 
     return this.getInvoice(tenantId, invoiceId);
   }
 
-  addLine(tenantId: string, invoiceId: string, data: AddLineDto): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  addLine(tenantId: string, invoiceId: string, data: AddLineDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
     this.ensureDraft(invoice);
     this.validateLineData(data);
@@ -202,7 +191,7 @@ export class InvoicesService {
     return this.recalculateTotals(tenantId, invoiceId);
   }
 
-  removeLine(tenantId: string, invoiceId: string, lineId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  removeLine(tenantId: string, invoiceId: string, lineId: string, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
     this.ensureDraft(invoice);
 
