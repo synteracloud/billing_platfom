@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { FinancialStateValidator } from '../../common/transactions/financial-state.validator';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { CustomersService } from '../customers/customers.service';
 import { EventsService } from '../events/events.service';
@@ -194,6 +195,12 @@ export class PaymentsService {
         key: 'events',
         snapshot: () => this.eventsService.createSnapshot(),
         restore: (snapshot) => this.eventsService.restoreSnapshot(snapshot as ReturnType<EventsService['createSnapshot']>)
+      },
+      {
+        key: 'financial-state-validator',
+        snapshot: () => null,
+        restore: () => undefined,
+        validate: () => new FinancialStateValidator(this.invoicesRepository, this.paymentsRepository).validate()
       }
     ];
   }

@@ -229,6 +229,21 @@ CREATE TABLE idempotency_key (
   UNIQUE (tenant_id, method, path, idempotency_key)
 );
 
+CREATE TABLE ledger_account (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenant(id),
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  parent_id UUID NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, code),
+  FOREIGN KEY (tenant_id, parent_id) REFERENCES ledger_account(tenant_id, id),
+  CHECK (type IN ('asset', 'liability', 'equity', 'revenue', 'expense')),
+  CHECK (parent_id IS NULL OR parent_id <> id)
+);
+
 CREATE TABLE journal_entry (
   id UUID PRIMARY KEY,
   tenant_id UUID NOT NULL REFERENCES tenant(id),
@@ -255,6 +270,7 @@ CREATE TABLE journal_line (
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
   FOREIGN KEY (tenant_id, journal_entry_id) REFERENCES journal_entry(tenant_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, account_code) REFERENCES ledger_account(tenant_id, code),
   CHECK (direction IN ('debit', 'credit')),
   CHECK (amount_minor > 0)
 );
@@ -266,6 +282,8 @@ CREATE INDEX idx_payment_tenant_status ON payment (tenant_id, status);
 CREATE INDEX idx_payment_allocation_tenant_invoice ON payment_allocation (tenant_id, invoice_id);
 CREATE INDEX idx_event_log_tenant_occurred ON event_log (tenant_id, occurred_at DESC);
 CREATE INDEX idx_journal_entry_tenant_date ON journal_entry (tenant_id, entry_date DESC);
-CREATE INDEX idx_journal_entry_tenant_source_event ON journal_entry (tenant_id, source_event_id, created_at DESC);
+CREATE INDEX idx_ledger_account_tenant ON ledger_account (tenant_id);
+CREATE INDEX idx_ledger_account_tenant_type ON ledger_account (tenant_id, type);
+CREATE INDEX idx_ledger_account_tenant_parent ON ledger_account (tenant_id, parent_id);
 CREATE INDEX idx_journal_line_tenant_entry ON journal_line (tenant_id, journal_entry_id);
 CREATE INDEX idx_journal_line_tenant_account_entry ON journal_line (tenant_id, account_code, journal_entry_id);

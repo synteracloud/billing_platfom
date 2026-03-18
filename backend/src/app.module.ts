@@ -1,5 +1,6 @@
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { TransactionsModule } from './common/transactions/transactions.module';
+import { ChartOfAccountsModule } from './modules/accounting/chart-of-accounts.module';
 import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
 import { DatabaseModule } from './database/database.module';
@@ -20,6 +21,7 @@ import { UsersModule } from './modules/users/module';
 @Module({
   imports: [
     DatabaseModule,
+    ChartOfAccountsModule,
     TenantsModule,
     UsersModule,
     CustomersModule,
@@ -27,6 +29,7 @@ import { UsersModule } from './modules/users/module';
     ProductsModule,
     IdempotencyModule,
     InvoicesModule,
+    LedgerModule,
     PaymentsModule,
     LedgerModule,
     SubscriptionsModule,
@@ -58,6 +61,7 @@ export class AppModule implements NestModule {
       { path: 'api/v1/events', method: RequestMethod.ALL },
       { path: 'api/v1/events/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
+      { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }
     );
     consumer.apply(IdempotencyMiddleware).forRoutes(
