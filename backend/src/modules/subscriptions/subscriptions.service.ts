@@ -42,12 +42,16 @@ export class SubscriptionsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'subscription_created',
-      event_category: 'financial',
-      entity_type: 'subscription',
-      entity_id: created.id,
-      actor_type: 'system',
-      payload: { status: created.status }
+      type: 'subledger.receivable.updated.v1',
+      aggregate_type: 'receivable_position',
+      aggregate_id: created.id,
+      aggregate_version: 1,
+      payload: {
+        receivable_position_id: created.id,
+        customer_id: created.customer_id,
+        open_amount_minor: 0,
+        currency_code: String(created.pricing_terms.currency ?? 'USD')
+      }
     });
 
     return created;
@@ -93,12 +97,16 @@ export class SubscriptionsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'subscription_cancelled',
-      event_category: 'financial',
-      entity_type: 'subscription',
-      entity_id: id,
-      actor_type: 'system',
-      payload: {}
+      type: 'subledger.receivable.updated.v1',
+      aggregate_type: 'receivable_position',
+      aggregate_id: id,
+      aggregate_version: 2,
+      payload: {
+        receivable_position_id: id,
+        customer_id: subscription.customer_id,
+        open_amount_minor: 0,
+        currency_code: String(subscription.pricing_terms.currency ?? 'USD')
+      }
     });
 
     return updated!;

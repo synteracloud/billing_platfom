@@ -50,12 +50,17 @@ export class PaymentsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'payment_recorded',
-      event_category: 'financial',
-      entity_type: 'payment',
-      entity_id: payment.id,
-      actor_type: 'system',
-      payload: { amount_received_minor: payment.amount_received_minor }
+      type: 'billing.payment.recorded.v1',
+      aggregate_type: 'payment',
+      aggregate_id: payment.id,
+      aggregate_version: 1,
+      payload: {
+        payment_id: payment.id,
+        customer_id: payment.customer_id,
+        amount_minor: payment.amount_received_minor,
+        currency_code: payment.currency,
+        status: payment.status
+      }
     });
 
     return this.getPayment(tenantId, payment.id);
@@ -110,12 +115,16 @@ export class PaymentsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'payment_allocated',
-      event_category: 'financial',
-      entity_type: 'payment',
-      entity_id: paymentId,
-      actor_type: 'system',
-      payload: { allocations: data.allocations.length }
+      type: 'billing.payment.allocated.v1',
+      aggregate_type: 'payment',
+      aggregate_id: paymentId,
+      aggregate_version: 1,
+      payload: {
+        payment_id: paymentId,
+        allocation_count: data.allocations.length,
+        total_allocated_minor: requestedTotal,
+        currency_code: payment.currency
+      }
     });
 
     return this.getPayment(tenantId, paymentId);
@@ -141,12 +150,16 @@ export class PaymentsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'payment_voided',
-      event_category: 'financial',
-      entity_type: 'payment',
-      entity_id: paymentId,
-      actor_type: 'system',
-      payload: {}
+      type: 'billing.payment.refunded.v1',
+      aggregate_type: 'payment',
+      aggregate_id: paymentId,
+      aggregate_version: 1,
+      payload: {
+        payment_id: paymentId,
+        refunded_at: new Date().toISOString(),
+        amount_minor: payment.amount_received_minor,
+        currency_code: payment.currency
+      }
     });
 
     return this.getPayment(tenantId, paymentId);

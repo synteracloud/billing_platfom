@@ -53,12 +53,18 @@ export class InvoicesService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'invoice_created',
-      event_category: 'financial',
-      entity_type: 'invoice',
-      entity_id: invoice.id,
-      actor_type: 'system',
-      payload: { invoice_number: invoice.invoice_number }
+      type: 'billing.invoice.created.v1',
+      aggregate_type: 'invoice',
+      aggregate_id: invoice.id,
+      aggregate_version: 1,
+      payload: {
+        invoice_id: invoice.id,
+        customer_id: invoice.customer_id,
+        invoice_number: invoice.invoice_number,
+        status: invoice.status,
+        total_minor: invoice.total_minor,
+        currency_code: invoice.currency
+      }
     });
 
     return this.getInvoice(tenantId, invoice.id);
@@ -113,17 +119,24 @@ export class InvoicesService {
       issue_date: invoice.issue_date ?? now.slice(0, 10)
     });
 
+    const issuedInvoice = this.getInvoice(tenantId, invoiceId);
+
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'invoice_issued',
-      event_category: 'financial',
-      entity_type: 'invoice',
-      entity_id: invoiceId,
-      actor_type: 'system',
-      payload: {}
+      type: 'billing.invoice.issued.v1',
+      aggregate_type: 'invoice',
+      aggregate_id: invoiceId,
+      aggregate_version: 1,
+      payload: {
+        invoice_id: invoiceId,
+        issue_date: issuedInvoice.issue_date ?? now.slice(0, 10),
+        due_date: issuedInvoice.due_date,
+        total_minor: issuedInvoice.total_minor,
+        currency_code: issuedInvoice.currency
+      }
     });
 
-    return this.getInvoice(tenantId, invoiceId);
+    return issuedInvoice;
   }
 
   voidInvoice(tenantId: string, invoiceId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
@@ -137,20 +150,24 @@ export class InvoicesService {
       throw new ConflictException('Invoice is already void');
     }
 
+    const voidedAt = new Date().toISOString();
     this.invoicesRepository.update(tenantId, invoiceId, {
       status: 'void',
-      voided_at: new Date().toISOString(),
+      voided_at: voidedAt,
       amount_due_minor: 0
     });
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      event_type: 'invoice_voided',
-      event_category: 'financial',
-      entity_type: 'invoice',
-      entity_id: invoiceId,
-      actor_type: 'system',
-      payload: {}
+      type: 'billing.invoice.voided.v1',
+      aggregate_type: 'invoice',
+      aggregate_id: invoiceId,
+      aggregate_version: 1,
+      payload: {
+        invoice_id: invoiceId,
+        voided_at: voidedAt,
+        reason: null
+      }
     });
 
     return this.getInvoice(tenantId, invoiceId);
