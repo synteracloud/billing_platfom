@@ -11,6 +11,7 @@ import { EventsModule } from './modules/events/events.module';
 import { IdempotencyModule } from './modules/idempotency/idempotency.module';
 import { IdempotencyMiddleware } from './modules/idempotency/idempotency.middleware';
 import { InvoicesModule } from './modules/invoices/invoices.module';
+import { LedgerModule } from './modules/ledger/ledger.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
@@ -28,6 +29,7 @@ import { UsersModule } from './modules/users/module';
     ProductsModule,
     IdempotencyModule,
     InvoicesModule,
+    LedgerModule,
     PaymentsModule,
     SubscriptionsModule,
     DocumentsModule,
