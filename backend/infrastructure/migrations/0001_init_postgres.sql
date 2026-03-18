@@ -247,6 +247,7 @@ CREATE TABLE ledger_account (
 CREATE TABLE journal_entry (
   id UUID PRIMARY KEY,
   tenant_id UUID NOT NULL REFERENCES tenant(id),
+  batch_id UUID NOT NULL,
   source_event_id UUID NOT NULL,
   rule_version TEXT NOT NULL,
   status TEXT NOT NULL,
