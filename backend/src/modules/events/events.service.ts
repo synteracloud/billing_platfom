@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { QueryEventsDto } from './dto/query-events.dto';
-import { ActorType, EventCategory, EventEntity, EventType } from './entities/event.entity';
 import { EventConsumerIdempotencyService } from '../idempotency/event-consumer-idempotency.service';
+import { QueryEventsDto } from './dto/query-events.dto';
+import { createDomainEvent, CreateDomainEventInput, DomainEvent, DomainEventType } from './entities/event.entity';
 import { EventsRepository } from './events.repository';
 import { validateDomainEvent } from './domain-event.validator';
 
@@ -30,7 +30,6 @@ export class EventsService {
     return this.eventsRepository.create(event);
   }
 
-
   consumeEventOnce<T>(
     tenantId: string,
     consumerName: string,
@@ -39,7 +38,16 @@ export class EventsService {
   ): Promise<T | null> {
     return this.eventConsumerIdempotencyService.execute(tenantId, consumerName, eventId, handler);
   }
-  private validateCreateInput(input: CreateEventInput): void {
+
+  createSnapshot(): ReturnType<EventsRepository['createSnapshot']> {
+    return this.eventsRepository.createSnapshot();
+  }
+
+  restoreSnapshot(snapshot: ReturnType<EventsRepository['createSnapshot']>): void {
+    this.eventsRepository.restoreSnapshot(snapshot);
+  }
+
+  private validateCreateInput(input: CreateDomainEventInput): void {
     if (!input.tenant_id || input.tenant_id.trim().length === 0) {
       throw new BadRequestException('tenant_id is required');
     }

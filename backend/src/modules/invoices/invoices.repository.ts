@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { InvoiceEntity } from './entities/invoice.entity';
 import { InvoiceLineEntity } from './entities/invoice-line.entity';
@@ -24,6 +24,13 @@ export class InvoicesRepository {
   }
 
   create(invoice: Omit<InvoiceEntity, 'id' | 'created_at' | 'updated_at'>): InvoiceEntity {
+    const duplicate = [...this.invoices.values()].find(
+      (existing) => existing.tenant_id === invoice.tenant_id && existing.invoice_number === invoice.invoice_number
+    );
+    if (duplicate) {
+      throw new ConflictException('Unique constraint violation for (tenant_id, invoice_number)');
+    }
+
     const now = new Date().toISOString();
     const created: InvoiceEntity = {
       ...invoice,
@@ -46,6 +53,15 @@ export class InvoicesRepository {
       return undefined;
     }
 
+    if (patch.invoice_number && patch.invoice_number !== existing.invoice_number) {
+      const duplicate = [...this.invoices.values()].find(
+        (invoice) => invoice.tenant_id === tenantId && invoice.invoice_number === patch.invoice_number && invoice.id !== invoiceId
+      );
+      if (duplicate) {
+        throw new ConflictException('Unique constraint violation for (tenant_id, invoice_number)');
+      }
+    }
+
     const updated: InvoiceEntity = {
       ...existing,
       ...patch,
@@ -57,6 +73,11 @@ export class InvoicesRepository {
   }
 
   createLine(line: Omit<InvoiceLineEntity, 'id' | 'created_at' | 'updated_at'>): InvoiceLineEntity {
+    const invoice = this.invoices.get(line.invoice_id);
+    if (!invoice || invoice.tenant_id !== line.tenant_id) {
+      throw new ConflictException('Foreign key violation for invoice_id');
+    }
+
     const now = new Date().toISOString();
     const created: InvoiceLineEntity = {
       ...line,
