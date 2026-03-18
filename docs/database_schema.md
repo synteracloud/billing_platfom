@@ -356,7 +356,42 @@
 
 ---
 
-### 2.10 `document`
+### 2.10 `ledger_account`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `code TEXT NOT NULL`
+- `name TEXT NOT NULL`
+- `type TEXT NOT NULL` (`asset`, `liability`, `equity`, `revenue`, `expense`)
+- `parent_id UUID NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, parent_id) -> ledger_account(tenant_id, id)` (nullable self-reference for chart-of-accounts hierarchy)
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
+- `UNIQUE (tenant_id, code)`
+
+**Checks / invariants**
+- `CHECK (type IN ('asset', 'liability', 'equity', 'revenue', 'expense'))`
+- `CHECK (parent_id IS NULL OR parent_id <> id)`
+- Parent/child relationships are tenant-scoped, preventing cross-tenant hierarchies.
+- Codes should be normalized and matched to the tenant's chart of accounts before journal posting.
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, type)`
+- `INDEX (tenant_id, parent_id)`
+
+---
+
+### 2.11 `document`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -393,7 +428,7 @@
 
 ---
 
-### 2.11 `event_log`
+### 2.12 `event_log`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -431,7 +466,7 @@
 
 ---
 
-### 2.12 `projects`
+### 2.13 `projects`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -462,7 +497,7 @@
 
 ---
 
-### 2.13 `time_entries`
+### 2.14 `time_entries`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -499,7 +534,7 @@
 
 ---
 
-### 2.14 `expenses`
+### 2.15 `expenses`
 
 **Columns**
 - `id UUID NOT NULL`
