@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "outDir": ".tmp-test-dist",
+    "rootDir": "src"
+  },
+  "include": [
+    "src/common/transactions/financial-transaction.manager.ts",
+    "src/modules/idempotency/**/*.ts",
+    "src/modules/events/dto/query-events.dto.ts",
+    "src/modules/events/domain-event.validator.ts",
+    "src/modules/events/entities/event.entity.ts",
+    "src/modules/events/events.repository.ts",
+    "src/modules/events/event-bus.service.ts",
+    "src/modules/events/events.service.ts",
+    "src/modules/ledger/**/*.ts"
+  ]
+}

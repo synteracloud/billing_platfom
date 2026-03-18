@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { LedgerService } = require('../.tmp-test-dist/modules/ledger/ledger.service');
 const { LedgerRepository } = require('../.tmp-test-dist/modules/ledger/ledger.repository');
+const { EventBusService } = require('../.tmp-test-dist/modules/events/event-bus.service');
 const { EventsService } = require('../.tmp-test-dist/modules/events/events.service');
 const { EventsRepository } = require('../.tmp-test-dist/modules/events/events.repository');
 const { EventConsumerIdempotencyService } = require('../.tmp-test-dist/modules/idempotency/event-consumer-idempotency.service');
@@ -15,7 +16,8 @@ function createLedgerService() {
   const idempotencyRepository = new IdempotencyRepository();
   const idempotencyService = new IdempotencyService(idempotencyRepository);
   const eventConsumerIdempotencyService = new EventConsumerIdempotencyService(idempotencyService);
-  const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService);
+  const eventBusService = new EventBusService(eventsRepository, eventConsumerIdempotencyService);
+  const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService);
   const transactionManager = new FinancialTransactionManager();
 
   return {

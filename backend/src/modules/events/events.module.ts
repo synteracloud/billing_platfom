@@ -8,7 +8,7 @@ import { EventsService } from './events.service';
 @Module({
   imports: [IdempotencyModule, EventQueueModule],
   controllers: [EventsController],
-  providers: [EventsService, EventsRepository],
+  providers: [EventBusService, EventsService, EventsRepository],
   exports: [EventsService]
 })
 export class EventsModule {}

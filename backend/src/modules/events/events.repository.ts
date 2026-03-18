@@ -31,6 +31,10 @@ export class EventsRepository {
     return this.clone(event);
   }
 
+  listAll(): DomainEvent[] {
+    return [...this.events.values()].map((event) => this.clone(event));
+  }
+
   listByTenant(tenantId: string, query: QueryEventsDto): DomainEvent[] {
     const fromDate = query.occurred_at_from ? new Date(query.occurred_at_from) : null;
     const toDate = query.occurred_at_to ? new Date(query.occurred_at_to) : null;
