@@ -59,6 +59,7 @@ const payloadValidators: {
     requireString(payload.source_event_id, 'payload.source_event_id');
     requireString(payload.currency_code, 'payload.currency_code');
     requireNumber(payload.line_count, 'payload.line_count');
+    requireString(payload.batch_id, 'payload.batch_id');
   },
   'accounting.journal.reversed.v1': (payload) => {
     requireString(payload.journal_entry_id, 'payload.journal_entry_id');
