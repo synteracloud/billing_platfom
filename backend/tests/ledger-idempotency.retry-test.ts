@@ -16,7 +16,7 @@ async function main() {
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService);
   const ledgerRepository = new LedgerRepository();
   const transactionManager = new FinancialTransactionManager();
-  const ledgerService = new LedgerService(eventsService, ledgerRepository, transactionManager);
+  const ledgerService = new LedgerService(ledgerRepository, eventsService, transactionManager);
 
   const event = eventsService.logEvent({
     tenant_id: 'tenant-1',
@@ -42,7 +42,7 @@ async function main() {
   assert.equal(second.id, third.id);
   assert.equal(first.lines.length, 2);
   assert.equal(eventsService.listEvents('tenant-1', {}).filter((item: { type: string }) => item.type === 'accounting.journal.posted.v1').length, 1);
-  assert.equal(ledgerRepository.findBySourceEvent('tenant-1', event.id, 1)?.id, first.id);
+  assert.equal(ledgerRepository.findBySourceEvent('tenant-1', event.id, '1')?.id, first.id);
 
   const otherEvent = eventsService.logEvent({
     tenant_id: 'tenant-1',
@@ -66,7 +66,7 @@ async function main() {
     conflictMessage = (error as Error).message;
   }
 
-  assert.match(conflictMessage, /idempotency key is already bound/);
+  assert.match(conflictMessage, /request idempotency key is already bound/);
   console.log('ledger idempotency retry test passed');
 }
 
