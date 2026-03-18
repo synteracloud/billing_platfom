@@ -18,10 +18,15 @@ export const CANONICAL_EVENT_TYPES = [
   'recon.match.classified.v1'
 ] as const;
 
-export type DomainEventType = (typeof CANONICAL_EVENT_TYPES)[number];
+export type CanonicalDomainEventType = (typeof CANONICAL_EVENT_TYPES)[number];
+export type AuditEventType = `audit.${string}.v1`;
+export type DomainEventType = CanonicalDomainEventType | AuditEventType;
+export type EventCategory = 'audit' | 'financial' | 'integration';
+export type ActorType = 'user' | 'system';
 
 export type DomainAggregateType =
   | 'invoice'
+  | 'invoice_line'
   | 'payment'
   | 'payment_allocation'
   | 'journal_entry'
@@ -149,6 +154,20 @@ export type ReconMatchClassifiedPayload = {
   confidence_score: number;
 };
 
+export type AuditPayload = {
+  actor: {
+    type: ActorType;
+    id: string | null;
+  };
+  action: string;
+  entity: {
+    type: DomainAggregateType;
+    id: string;
+  };
+  timestamp: string;
+  payload: Record<string, unknown>;
+};
+
 export type DomainEventPayloadMap = {
   'billing.invoice.created.v1': InvoiceCreatedPayload;
   'billing.invoice.issued.v1': InvoiceIssuedPayload;
@@ -167,27 +186,40 @@ export type DomainEventPayloadMap = {
   'recon.match.classified.v1': ReconMatchClassifiedPayload;
 };
 
+export type EventPayloadFor<TEventType extends DomainEventType> =
+  TEventType extends CanonicalDomainEventType ? DomainEventPayloadMap[TEventType] : AuditPayload;
+
 export interface DomainEvent<TEventType extends DomainEventType = DomainEventType> {
   id: string;
   type: TEventType;
+  event_type: TEventType;
   version: number;
   tenant_id: string;
-  payload: DomainEventPayloadMap[TEventType];
+  payload: EventPayloadFor<TEventType>;
   occurred_at: string;
   recorded_at: string;
+  created_at: string;
+  updated_at: string;
   aggregate_type: DomainAggregateType;
   aggregate_id: string;
+  entity_type: DomainAggregateType;
+  entity_id: string;
   aggregate_version: number;
   causation_id: string | null;
   correlation_id: string | null;
   idempotency_key: string;
   producer: string;
+  event_category: EventCategory;
+  actor_type: ActorType;
+  actor_id: string | null;
+  action: string;
+  timestamp: string;
 }
 
 export interface CreateDomainEventInput<TEventType extends DomainEventType = DomainEventType> {
   type: TEventType;
   tenant_id: string;
-  payload: DomainEventPayloadMap[TEventType];
+  payload: EventPayloadFor<TEventType>;
   aggregate_type: DomainAggregateType;
   aggregate_id: string;
   aggregate_version: number;
@@ -196,28 +228,60 @@ export interface CreateDomainEventInput<TEventType extends DomainEventType = Dom
   correlation_id?: string | null;
   idempotency_key?: string;
   producer?: string;
+  event_category?: EventCategory;
+  actor_type?: ActorType;
+  actor_id?: string | null;
+  action?: string;
 }
 
 export function createDomainEvent<TEventType extends DomainEventType>(
   input: CreateDomainEventInput<TEventType>
 ): DomainEvent<TEventType> {
   const now = new Date().toISOString();
-  const version = parseInt(input.type.split('.v').at(-1) ?? '1', 10);
+  const version = parseInt(input.type.split('.v').slice(-1)[0] ?? '1', 10);
+  const occurredAt = input.occurred_at ?? now;
 
   return {
     id: randomUUID(),
     type: input.type,
+    event_type: input.type,
     version,
     tenant_id: input.tenant_id,
     payload: input.payload,
-    occurred_at: input.occurred_at ?? now,
+    occurred_at: occurredAt,
     recorded_at: now,
+    created_at: now,
+    updated_at: now,
     aggregate_type: input.aggregate_type,
     aggregate_id: input.aggregate_id,
+    entity_type: input.aggregate_type,
+    entity_id: input.aggregate_id,
     aggregate_version: input.aggregate_version,
     causation_id: input.causation_id ?? null,
     correlation_id: input.correlation_id ?? null,
     idempotency_key: input.idempotency_key ?? `${input.type}:${input.aggregate_id}:${input.aggregate_version}`,
-    producer: input.producer ?? 'billing-platform'
+    producer: input.producer ?? 'billing-platform',
+    event_category: input.event_category ?? inferEventCategory(input.type),
+    actor_type: input.actor_type ?? 'system',
+    actor_id: input.actor_id ?? null,
+    action: input.action ?? inferAction(input.type),
+    timestamp: occurredAt
   };
+}
+
+function inferEventCategory(type: DomainEventType): EventCategory {
+  if (type.startsWith('integration.')) {
+    return 'integration';
+  }
+
+  if (type.startsWith('audit.')) {
+    return 'audit';
+  }
+
+  return 'financial';
+}
+
+function inferAction(type: DomainEventType): string {
+  const parts = type.split('.');
+  return parts.length >= 3 ? parts[2] : type;
 }

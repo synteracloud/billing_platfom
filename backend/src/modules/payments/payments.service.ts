@@ -29,8 +29,8 @@ export class PaymentsService {
     return this.paymentsRepository.listByTenant(tenantId).map((payment) => this.buildPaymentDetails(tenantId, payment));
   }
 
-  createPayment(tenantId: string, data: CreatePaymentDto, idempotencyKey?: string): PaymentDetails {
-    return this.transactionManager.wrapper(() => {
+  async createPayment(tenantId: string, data: CreatePaymentDto, idempotencyKey?: string): Promise<PaymentDetails> {
+    return this.transactionManager.wrapper(async () => {
       this.validateCreatePayload(data);
       this.customersService.getCustomer(tenantId, data.customer_id);
 
@@ -48,8 +48,19 @@ export class PaymentsService {
         metadata: data.metadata ?? null
       });
 
+      this.eventsService.logMutation({
+        tenant_id: tenantId,
+        entity_type: 'payment',
+        entity_id: payment.id,
+        action: 'created',
+        aggregate_version: 1,
+        correlation_id: payment.id,
+        idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:payment:create` : undefined,
+        payload: { after: payment }
+      });
+
       if (data.allocations && data.allocations.length > 0) {
-        this.allocatePayment(tenantId, payment.id, { allocations: data.allocations }, idempotencyKey);
+        await this.allocatePayment(tenantId, payment.id, { allocations: data.allocations }, idempotencyKey);
       }
 
       this.eventsService.logEvent({
@@ -58,6 +69,7 @@ export class PaymentsService {
         aggregate_type: 'payment',
         aggregate_id: payment.id,
         aggregate_version: 1,
+        correlation_id: payment.id,
         idempotency_key: idempotencyKey,
         payload: {
           payment_id: payment.id,
@@ -81,8 +93,8 @@ export class PaymentsService {
     return this.buildPaymentDetails(tenantId, payment);
   }
 
-  allocatePayment(tenantId: string, paymentId: string, data: AllocatePaymentDto, idempotencyKey?: string): PaymentDetails {
-    return this.transactionManager.wrapper(() => {
+  async allocatePayment(tenantId: string, paymentId: string, data: AllocatePaymentDto, idempotencyKey?: string): Promise<PaymentDetails> {
+    return this.transactionManager.wrapper(async () => {
       const payment = this.requireAllocatablePayment(tenantId, paymentId);
       this.validateAllocatePayload(data);
 
@@ -102,8 +114,9 @@ export class PaymentsService {
       }
 
       const touchedInvoiceIds = new Set<string>();
+      let allocationVersion = this.paymentsRepository.listAllocationsByPayment(tenantId, paymentId).length;
       for (const item of data.allocations) {
-        this.paymentsRepository.createAllocation({
+        const createdAllocation = this.paymentsRepository.createAllocation({
           tenant_id: tenantId,
           payment_id: paymentId,
           invoice_id: item.invoice_id,
@@ -111,23 +124,33 @@ export class PaymentsService {
           allocation_date: item.allocation_date ?? new Date().toISOString().slice(0, 10),
           metadata: null
         });
+        allocationVersion += 1;
+        this.eventsService.logMutation({
+          tenant_id: tenantId,
+          entity_type: 'payment_allocation',
+          entity_id: createdAllocation.id,
+          action: 'created',
+          aggregate_version: allocationVersion,
+          correlation_id: paymentId,
+          payload: { invoice_id: item.invoice_id, after: createdAllocation }
+        });
         touchedInvoiceIds.add(item.invoice_id);
       }
 
-      this.refreshPaymentAllocationBalance(tenantId, paymentId);
+      this.refreshPaymentAllocationBalance(tenantId, paymentId, paymentId);
 
       for (const invoiceId of touchedInvoiceIds) {
-        this.syncInvoicePaymentStatus(tenantId, invoiceId);
+        this.syncInvoicePaymentStatus(tenantId, invoiceId, paymentId);
       }
 
       const updatedPayment = this.getPayment(tenantId, paymentId);
-
       this.eventsService.logEvent({
         tenant_id: tenantId,
         type: 'billing.payment.allocated.v1',
         aggregate_type: 'payment_allocation',
         aggregate_id: paymentId,
         aggregate_version: Math.max(1, updatedPayment.allocations.length),
+        correlation_id: paymentId,
         idempotency_key: idempotencyKey,
         payload: {
           payment_id: paymentId,
@@ -141,23 +164,50 @@ export class PaymentsService {
     }, this.financialParticipants());
   }
 
-  voidPayment(tenantId: string, paymentId: string, idempotencyKey?: string): PaymentDetails {
-    return this.transactionManager.wrapper(() => {
+  async voidPayment(tenantId: string, paymentId: string, idempotencyKey?: string): Promise<PaymentDetails> {
+    return this.transactionManager.wrapper(async () => {
       const payment = this.getPaymentRecord(tenantId, paymentId);
       if (payment.status === 'void') {
         return this.getPayment(tenantId, paymentId);
       }
 
       const removedAllocations = this.paymentsRepository.deleteAllocationsByPayment(tenantId, paymentId);
-      this.paymentsRepository.update(tenantId, paymentId, {
+      for (const allocation of removedAllocations) {
+        this.eventsService.logMutation({
+          tenant_id: tenantId,
+          entity_type: 'payment_allocation',
+          entity_id: allocation.id,
+          action: 'deleted',
+          aggregate_version: Math.max(1, removedAllocations.length),
+          correlation_id: paymentId,
+          payload: { before: allocation }
+        });
+      }
+
+      const updatedPayment = this.paymentsRepository.update(tenantId, paymentId, {
         status: 'void',
         allocated_minor: 0,
         unallocated_minor: payment.amount_received_minor
       });
 
+      if (!updatedPayment) {
+        throw new NotFoundException('Payment not found');
+      }
+
+      this.eventsService.logMutation({
+        tenant_id: tenantId,
+        entity_type: 'payment',
+        entity_id: paymentId,
+        action: 'voided',
+        aggregate_version: 3,
+        correlation_id: paymentId,
+        idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:payment:void` : undefined,
+        payload: { before: payment, after: updatedPayment }
+      });
+
       const touchedInvoiceIds = new Set(removedAllocations.map((allocation) => allocation.invoice_id));
       for (const invoiceId of touchedInvoiceIds) {
-        this.syncInvoicePaymentStatus(tenantId, invoiceId);
+        this.syncInvoicePaymentStatus(tenantId, invoiceId, paymentId);
       }
 
       this.eventsService.logEvent({
@@ -166,6 +216,7 @@ export class PaymentsService {
         aggregate_type: 'payment',
         aggregate_id: paymentId,
         aggregate_version: 3,
+        correlation_id: paymentId,
         idempotency_key: idempotencyKey,
         payload: {
           payment_id: paymentId,
@@ -205,17 +256,31 @@ export class PaymentsService {
     ];
   }
 
-  private refreshPaymentAllocationBalance(tenantId: string, paymentId: string): void {
+  private refreshPaymentAllocationBalance(tenantId: string, paymentId: string, correlationId: string): void {
     const payment = this.getPaymentRecord(tenantId, paymentId);
     const allocatedMinor = this.paymentsRepository.sumAllocatedForPayment(tenantId, paymentId);
 
-    this.paymentsRepository.update(tenantId, paymentId, {
+    const updated = this.paymentsRepository.update(tenantId, paymentId, {
       allocated_minor: allocatedMinor,
       unallocated_minor: payment.amount_received_minor - allocatedMinor
     });
+
+    if (!updated) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'payment',
+      entity_id: paymentId,
+      action: 'allocation_balance_updated',
+      aggregate_version: Math.max(1, updated.allocated_minor > 0 ? 2 : 1),
+      correlation_id: correlationId,
+      payload: { before: payment, after: updated }
+    });
   }
 
-  private syncInvoicePaymentStatus(tenantId: string, invoiceId: string): void {
+  private syncInvoicePaymentStatus(tenantId: string, invoiceId: string, correlationId: string): void {
     const invoice = this.invoicesRepository.findById(tenantId, invoiceId);
     if (!invoice || invoice.status === 'void') {
       return;
@@ -234,10 +299,24 @@ export class PaymentsService {
       nextStatus = 'partially_paid';
     }
 
-    this.invoicesRepository.update(tenantId, invoiceId, {
+    const updated = this.invoicesRepository.update(tenantId, invoiceId, {
       status: nextStatus,
       amount_paid_minor: paidMinor,
       amount_due_minor: dueMinor
+    });
+
+    if (!updated) {
+      throw new NotFoundException(`Invoice not found: ${invoiceId}`);
+    }
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'invoice',
+      entity_id: invoiceId,
+      action: 'payment_status_synced',
+      aggregate_version: nextStatus === 'issued' ? 2 : 3,
+      correlation_id: correlationId,
+      payload: { before: invoice, after: updated }
     });
   }
 

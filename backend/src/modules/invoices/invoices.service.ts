@@ -6,8 +6,8 @@ import { EventsService } from '../events/events.service';
 import { AddLineDto } from './dto/add-line.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
-import { InvoiceEntity } from './entities/invoice.entity';
 import { InvoiceLineEntity } from './entities/invoice-line.entity';
+import { InvoiceEntity } from './entities/invoice.entity';
 import { InvoicesRepository } from './invoices.repository';
 
 @Injectable()
@@ -25,8 +25,8 @@ export class InvoicesService {
       .map((invoice) => ({ ...invoice, lines: this.invoicesRepository.listLines(tenantId, invoice.id) }));
   }
 
-  createInvoice(tenantId: string, data: CreateInvoiceDto, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
-    return this.transactionManager.wrapper(() => {
+  async createInvoice(tenantId: string, data: CreateInvoiceDto, idempotencyKey?: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
+    return this.transactionManager.wrapper(async () => {
       this.ensureCustomerExists(tenantId, data.customer_id);
       this.validateCurrency(data.currency);
 
@@ -51,18 +51,29 @@ export class InvoicesService {
         metadata: data.metadata ?? null
       });
 
+      this.eventsService.logMutation({
+        tenant_id: tenantId,
+        entity_type: 'invoice',
+        entity_id: invoice.id,
+        action: 'created',
+        aggregate_version: 1,
+        correlation_id: invoice.id,
+        idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:invoice:create` : undefined,
+        payload: { after: invoice }
+      });
+
       for (const line of data.lines ?? []) {
-        this.addLine(tenantId, invoice.id, line);
+        await this.addLine(tenantId, invoice.id, line);
       }
 
       const createdInvoice = this.getInvoice(tenantId, invoice.id);
-
       this.eventsService.logEvent({
         tenant_id: tenantId,
         type: 'billing.invoice.created.v1',
         aggregate_type: 'invoice',
         aggregate_id: invoice.id,
         aggregate_version: 1,
+        correlation_id: invoice.id,
         idempotency_key: idempotencyKey,
         payload: {
           invoice_id: invoice.id,
@@ -90,8 +101,8 @@ export class InvoicesService {
     };
   }
 
-  updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
-    return this.transactionManager.wrapper(() => {
+  async updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto, _idempotencyKey?: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
+    return this.transactionManager.wrapper(async () => {
       const invoice = this.getInvoice(tenantId, invoiceId);
       this.ensureDraft(invoice);
 
@@ -111,26 +122,47 @@ export class InvoicesService {
         throw new NotFoundException('Invoice not found');
       }
 
-      return this.recalculateTotals(tenantId, invoiceId);
+      return this.recalculateTotals(tenantId, invoiceId, 'updated', invoice.id, invoice);
     }, this.financialParticipants());
   }
 
-  issueInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
-    return this.transactionManager.wrapper(() => {
+  async issueInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
+    return this.transactionManager.wrapper(async () => {
       const invoice = this.getInvoice(tenantId, invoiceId);
 
       if (invoice.status !== 'draft') {
         throw new ConflictException('Only draft invoices can be issued');
       }
 
-      const now = new Date().toISOString();
-      this.invoicesRepository.update(tenantId, invoiceId, {
+      if (invoice.lines.length === 0) {
+        throw new ConflictException('Invoice must have at least one line before issuing');
+      }
+
+      const issuedAt = new Date().toISOString();
+      const updated = this.invoicesRepository.update(tenantId, invoiceId, {
         status: 'issued',
-        issued_at: now,
-        issue_date: invoice.issue_date ?? now.slice(0, 10)
+        issue_date: invoice.issue_date ?? issuedAt.slice(0, 10),
+        issued_at: issuedAt,
+        amount_due_minor: invoice.total_minor
       });
 
+      if (!updated) {
+        throw new NotFoundException('Invoice not found');
+      }
+
       const issuedInvoice = this.getInvoice(tenantId, invoiceId);
+      const issueDate = issuedInvoice.issue_date ?? issuedAt.slice(0, 10);
+
+      this.eventsService.logMutation({
+        tenant_id: tenantId,
+        entity_type: 'invoice',
+        entity_id: invoiceId,
+        action: 'issued',
+        aggregate_version: 2,
+        correlation_id: invoiceId,
+        idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:invoice:issued` : undefined,
+        payload: { before: invoice, after: issuedInvoice }
+      });
 
       this.eventsService.logEvent({
         tenant_id: tenantId,
@@ -138,10 +170,11 @@ export class InvoicesService {
         aggregate_type: 'invoice',
         aggregate_id: invoiceId,
         aggregate_version: 2,
+        correlation_id: invoiceId,
         idempotency_key: idempotencyKey,
         payload: {
           invoice_id: invoiceId,
-          issue_date: issuedInvoice.issue_date ?? now.slice(0, 10),
+          issue_date: issueDate,
           due_date: issuedInvoice.due_date,
           total_minor: issuedInvoice.total_minor,
           currency_code: issuedInvoice.currency
@@ -152,8 +185,8 @@ export class InvoicesService {
     }, this.financialParticipants());
   }
 
-  voidInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
-    return this.transactionManager.wrapper(() => {
+  async voidInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
+    return this.transactionManager.wrapper(async () => {
       const invoice = this.getInvoice(tenantId, invoiceId);
 
       if (invoice.status === 'paid' || invoice.status === 'partially_paid') {
@@ -165,10 +198,25 @@ export class InvoicesService {
       }
 
       const voidedAt = new Date().toISOString();
-      this.invoicesRepository.update(tenantId, invoiceId, {
+      const updated = this.invoicesRepository.update(tenantId, invoiceId, {
         status: 'void',
         voided_at: voidedAt,
         amount_due_minor: 0
+      });
+
+      if (!updated) {
+        throw new NotFoundException('Invoice not found');
+      }
+
+      this.eventsService.logMutation({
+        tenant_id: tenantId,
+        entity_type: 'invoice',
+        entity_id: invoiceId,
+        action: 'voided',
+        aggregate_version: 3,
+        correlation_id: invoiceId,
+        idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:invoice:voided` : undefined,
+        payload: { before: invoice, after: updated }
       });
 
       this.eventsService.logEvent({
@@ -177,6 +225,7 @@ export class InvoicesService {
         aggregate_type: 'invoice',
         aggregate_id: invoiceId,
         aggregate_version: 3,
+        correlation_id: invoiceId,
         idempotency_key: idempotencyKey,
         payload: {
           invoice_id: invoiceId,
@@ -189,8 +238,8 @@ export class InvoicesService {
     }, this.financialParticipants());
   }
 
-  addLine(tenantId: string, invoiceId: string, data: AddLineDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
-    return this.transactionManager.wrapper(() => {
+  async addLine(tenantId: string, invoiceId: string, data: AddLineDto, _idempotencyKey?: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
+    return this.transactionManager.wrapper(async () => {
       const invoice = this.getInvoice(tenantId, invoiceId);
       this.ensureDraft(invoice);
       this.validateLineData(data);
@@ -200,7 +249,7 @@ export class InvoicesService {
       const lineTax = data.line_tax_minor ?? (basisPoints ? Math.round((lineSubtotal * basisPoints) / 10000) : 0);
 
       const currentCount = this.invoicesRepository.listLines(tenantId, invoiceId).length;
-      this.invoicesRepository.createLine({
+      const createdLine = this.invoicesRepository.createLine({
         tenant_id: tenantId,
         invoice_id: invoiceId,
         product_id: data.product_id ?? null,
@@ -216,21 +265,42 @@ export class InvoicesService {
         metadata: data.metadata ?? null
       });
 
-      return this.recalculateTotals(tenantId, invoiceId);
+      this.eventsService.logMutation({
+        tenant_id: tenantId,
+        entity_type: 'invoice_line',
+        entity_id: createdLine.id,
+        action: 'created',
+        aggregate_version: currentCount + 1,
+        correlation_id: invoiceId,
+        payload: { invoice_id: invoiceId, after: createdLine }
+      });
+
+      return this.recalculateTotals(tenantId, invoiceId, 'line_created', invoiceId, invoice);
     }, this.financialParticipants());
   }
 
-  removeLine(tenantId: string, invoiceId: string, lineId: string, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
-    return this.transactionManager.wrapper(() => {
+  async removeLine(tenantId: string, invoiceId: string, lineId: string, _idempotencyKey?: string): Promise<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
+    return this.transactionManager.wrapper(async () => {
       const invoice = this.getInvoice(tenantId, invoiceId);
       this.ensureDraft(invoice);
 
+      const invoiceLine = this.invoicesRepository.findLineById(tenantId, invoiceId, lineId);
       const deleted = this.invoicesRepository.deleteLine(tenantId, invoiceId, lineId);
       if (!deleted) {
         throw new NotFoundException('Invoice line not found');
       }
 
-      return this.recalculateTotals(tenantId, invoiceId);
+      this.eventsService.logMutation({
+        tenant_id: tenantId,
+        entity_type: 'invoice_line',
+        entity_id: lineId,
+        action: 'deleted',
+        aggregate_version: Math.max(1, invoice.lines.length),
+        correlation_id: invoiceId,
+        payload: { invoice_id: invoiceId, before: invoiceLine ?? null }
+      });
+
+      return this.recalculateTotals(tenantId, invoiceId, 'line_deleted', invoiceId, invoice);
     }, this.financialParticipants());
   }
 
@@ -255,7 +325,13 @@ export class InvoicesService {
     ];
   }
 
-  private recalculateTotals(tenantId: string, invoiceId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  private recalculateTotals(
+    tenantId: string,
+    invoiceId: string,
+    action = 'totals_recalculated',
+    correlationId?: string,
+    beforeInvoice?: InvoiceEntity & { lines: InvoiceLineEntity[] }
+  ): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
     const lines = invoice.lines;
     const subtotal = lines.reduce((sum, line) => sum + line.line_subtotal_minor, 0);
@@ -263,11 +339,25 @@ export class InvoicesService {
     const total = Math.max(0, subtotal + tax - invoice.discount_minor);
     const amountDue = Math.max(0, total - invoice.amount_paid_minor);
 
-    this.invoicesRepository.update(tenantId, invoiceId, {
+    const updated = this.invoicesRepository.update(tenantId, invoiceId, {
       subtotal_minor: subtotal,
       tax_minor: tax,
       total_minor: total,
       amount_due_minor: amountDue
+    });
+
+    if (!updated) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'invoice',
+      entity_id: invoiceId,
+      action,
+      aggregate_version: invoice.status === 'issued' ? 2 : 1,
+      correlation_id: correlationId ?? invoiceId,
+      payload: { before: beforeInvoice ?? invoice, after: updated }
     });
 
     return this.getInvoice(tenantId, invoiceId);
