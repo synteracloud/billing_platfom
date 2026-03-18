@@ -97,4 +97,28 @@ export class PaymentsRepository {
 
     return existing;
   }
+
+  createSnapshot(): { payments: Map<string, PaymentEntity>; allocations: Map<string, PaymentAllocationEntity> } {
+    return {
+      payments: new Map([...this.payments.entries()].map(([id, payment]) => [id, this.clone(payment)])),
+      allocations: new Map([...this.allocations.entries()].map(([id, allocation]) => [id, this.clone(allocation)]))
+    };
+  }
+
+  restoreSnapshot(snapshot: { payments: Map<string, PaymentEntity>; allocations: Map<string, PaymentAllocationEntity> }): void {
+    this.payments.clear();
+    this.allocations.clear();
+
+    for (const [id, payment] of snapshot.payments.entries()) {
+      this.payments.set(id, this.clone(payment));
+    }
+
+    for (const [id, allocation] of snapshot.allocations.entries()) {
+      this.allocations.set(id, this.clone(allocation));
+    }
+  }
+
+  private clone<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
 }

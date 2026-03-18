@@ -97,4 +97,28 @@ export class InvoicesRepository {
   countByTenant(tenantId: string): number {
     return [...this.invoices.values()].filter((invoice) => invoice.tenant_id === tenantId).length;
   }
+
+  createSnapshot(): { invoices: Map<string, InvoiceEntity>; invoiceLines: Map<string, InvoiceLineEntity> } {
+    return {
+      invoices: new Map([...this.invoices.entries()].map(([id, invoice]) => [id, this.clone(invoice)])),
+      invoiceLines: new Map([...this.invoiceLines.entries()].map(([id, line]) => [id, this.clone(line)]))
+    };
+  }
+
+  restoreSnapshot(snapshot: { invoices: Map<string, InvoiceEntity>; invoiceLines: Map<string, InvoiceLineEntity> }): void {
+    this.invoices.clear();
+    this.invoiceLines.clear();
+
+    for (const [id, invoice] of snapshot.invoices.entries()) {
+      this.invoices.set(id, this.clone(invoice));
+    }
+
+    for (const [id, line] of snapshot.invoiceLines.entries()) {
+      this.invoiceLines.set(id, this.clone(line));
+    }
+  }
+
+  private clone<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
 }
