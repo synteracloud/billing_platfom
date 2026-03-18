@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { QueryEventsDto } from './dto/query-events.dto';
 import { ActorType, EventCategory, EventEntity, EventType } from './entities/event.entity';
+import { EventConsumerIdempotencyService } from '../idempotency/event-consumer-idempotency.service';
 import { EventsRepository } from './events.repository';
 
 type CreateEventInput = {
@@ -18,7 +19,10 @@ type CreateEventInput = {
 
 @Injectable()
 export class EventsService {
-  constructor(private readonly eventsRepository: EventsRepository) {}
+  constructor(
+    private readonly eventsRepository: EventsRepository,
+    private readonly eventConsumerIdempotencyService: EventConsumerIdempotencyService
+  ) {}
 
   listEvents(tenantId: string, query: QueryEventsDto): EventEntity[] {
     this.validateDateRange(query);
@@ -43,6 +47,15 @@ export class EventsService {
     });
   }
 
+
+  consumeEventOnce<T>(
+    tenantId: string,
+    consumerName: string,
+    eventId: string,
+    handler: () => Promise<T> | T
+  ): Promise<T | null> {
+    return this.eventConsumerIdempotencyService.execute(tenantId, consumerName, eventId, handler);
+  }
   private validateCreateInput(input: CreateEventInput): void {
     if (!input.tenant_id || input.tenant_id.trim().length === 0) {
       throw new BadRequestException('tenant_id is required');

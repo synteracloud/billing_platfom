@@ -22,7 +22,7 @@ export class InvoicesService {
       .map((invoice) => ({ ...invoice, lines: this.invoicesRepository.listLines(tenantId, invoice.id) }));
   }
 
-  createInvoice(tenantId: string, data: CreateInvoiceDto): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  createInvoice(tenantId: string, data: CreateInvoiceDto, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     this.ensureCustomerExists(tenantId, data.customer_id);
     this.validateCurrency(data.currency);
 
@@ -58,7 +58,8 @@ export class InvoicesService {
       entity_type: 'invoice',
       entity_id: invoice.id,
       actor_type: 'system',
-      payload: { invoice_number: invoice.invoice_number }
+      payload: { invoice_number: invoice.invoice_number },
+      idempotency_key: idempotencyKey ?? null
     });
 
     return this.getInvoice(tenantId, invoice.id);
@@ -76,7 +77,7 @@ export class InvoicesService {
     };
   }
 
-  updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  updateInvoice(tenantId: string, invoiceId: string, data: UpdateInvoiceDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
     this.ensureDraft(invoice);
 
@@ -99,7 +100,7 @@ export class InvoicesService {
     return this.recalculateTotals(tenantId, invoiceId);
   }
 
-  issueInvoice(tenantId: string, invoiceId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  issueInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
 
     if (invoice.status !== 'draft') {
@@ -120,13 +121,14 @@ export class InvoicesService {
       entity_type: 'invoice',
       entity_id: invoiceId,
       actor_type: 'system',
-      payload: {}
+      payload: {},
+      idempotency_key: idempotencyKey ?? null
     });
 
     return this.getInvoice(tenantId, invoiceId);
   }
 
-  voidInvoice(tenantId: string, invoiceId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  voidInvoice(tenantId: string, invoiceId: string, idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
 
     if (invoice.status === 'paid' || invoice.status === 'partially_paid') {
@@ -150,13 +152,14 @@ export class InvoicesService {
       entity_type: 'invoice',
       entity_id: invoiceId,
       actor_type: 'system',
-      payload: {}
+      payload: {},
+      idempotency_key: idempotencyKey ?? null
     });
 
     return this.getInvoice(tenantId, invoiceId);
   }
 
-  addLine(tenantId: string, invoiceId: string, data: AddLineDto): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  addLine(tenantId: string, invoiceId: string, data: AddLineDto, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
     this.ensureDraft(invoice);
     this.validateLineData(data);
@@ -185,7 +188,7 @@ export class InvoicesService {
     return this.recalculateTotals(tenantId, invoiceId);
   }
 
-  removeLine(tenantId: string, invoiceId: string, lineId: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
+  removeLine(tenantId: string, invoiceId: string, lineId: string, _idempotencyKey?: string): InvoiceEntity & { lines: InvoiceLineEntity[] } {
     const invoice = this.getInvoice(tenantId, invoiceId);
     this.ensureDraft(invoice);
 
