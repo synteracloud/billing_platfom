@@ -52,6 +52,8 @@ export class AppModule implements NestModule {
       { path: 'api/v1/products/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/invoices', method: RequestMethod.ALL },
       { path: 'api/v1/invoices/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/ledger', method: RequestMethod.ALL },
+      { path: 'api/v1/ledger/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/payments', method: RequestMethod.ALL },
       { path: 'api/v1/payments/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/subscriptions', method: RequestMethod.ALL },
@@ -73,7 +75,8 @@ export class AppModule implements NestModule {
       { path: 'api/v1/invoices/:id/lines/:line_id', method: RequestMethod.DELETE },
       { path: 'api/v1/payments', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/allocate', method: RequestMethod.POST },
-      { path: 'api/v1/payments/:id/void', method: RequestMethod.POST }
+      { path: 'api/v1/payments/:id/void', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/postings', method: RequestMethod.POST }
     );
 
 

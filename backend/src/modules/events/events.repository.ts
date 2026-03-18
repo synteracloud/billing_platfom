@@ -22,6 +22,16 @@ export class EventsRepository {
     return event;
   }
 
+
+  findById(tenantId: string, eventId: string): DomainEvent | undefined {
+    const event = this.events.get(eventId);
+    if (!event || event.tenant_id !== tenantId) {
+      return undefined;
+    }
+
+    return this.clone(event);
+  }
+
   listByTenant(tenantId: string, query: QueryEventsDto): DomainEvent[] {
     const fromDate = query.occurred_at_from ? new Date(query.occurred_at_from) : null;
     const toDate = query.occurred_at_to ? new Date(query.occurred_at_to) : null;
