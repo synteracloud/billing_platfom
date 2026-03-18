@@ -1,4 +1,5 @@
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
+import { TransactionsModule } from './common/transactions/transactions.module';
 import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
 import { DatabaseModule } from './database/database.module';

@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { CustomersService } from '../customers/customers.service';
 import { EventsService } from '../events/events.service';
 import { InvoicesRepository } from '../invoices/invoices.repository';
@@ -19,7 +20,8 @@ export class PaymentsService {
     private readonly paymentsRepository: PaymentsRepository,
     private readonly invoicesRepository: InvoicesRepository,
     private readonly customersService: CustomersService,
-    private readonly eventsService: EventsService
+    private readonly eventsService: EventsService,
+    private readonly transactionManager: FinancialTransactionManager
   ) {}
 
   listPayments(tenantId: string): PaymentDetails[] {
@@ -30,7 +32,7 @@ export class PaymentsService {
     this.validateCreatePayload(data);
     this.customersService.getCustomer(tenantId, data.customer_id);
 
-    const payment = this.paymentsRepository.create({
+      const payment = this.paymentsRepository.create({
       tenant_id: tenantId,
       customer_id: data.customer_id,
       payment_reference: data.payment_reference?.trim() || null,
@@ -48,7 +50,7 @@ export class PaymentsService {
       this.allocatePayment(tenantId, payment.id, { allocations: data.allocations }, idempotencyKey);
     }
 
-    this.eventsService.logEvent({
+      this.eventsService.logEvent({
       tenant_id: tenantId,
       event_type: 'payment_recorded',
       event_category: 'financial',
@@ -59,7 +61,8 @@ export class PaymentsService {
       idempotency_key: idempotencyKey ?? null
     });
 
-    return this.getPayment(tenantId, payment.id);
+      return this.getPayment(tenantId, payment.id);
+    }, this.financialParticipants());
   }
 
   getPayment(tenantId: string, paymentId: string): PaymentDetails {
@@ -75,24 +78,24 @@ export class PaymentsService {
     const payment = this.requireAllocatablePayment(tenantId, paymentId);
     this.validateAllocatePayload(data);
 
-    const alreadyAllocated = this.paymentsRepository.sumAllocatedForPayment(tenantId, paymentId);
-    const requestedTotal = data.allocations.reduce((sum, item) => sum + item.allocated_minor, 0);
-    if (alreadyAllocated + requestedTotal > payment.amount_received_minor) {
-      throw new ConflictException('Allocated total must not exceed payment amount');
-    }
-
-    for (const item of data.allocations) {
-      const invoice = this.requireAllocatableInvoice(tenantId, item.invoice_id, payment);
-      const invoiceAllocated = this.paymentsRepository.sumAllocatedForInvoice(tenantId, invoice.id);
-      const invoiceOutstanding = invoice.total_minor - invoiceAllocated;
-      if (item.allocated_minor > invoiceOutstanding) {
-        throw new ConflictException('Allocated total must not exceed invoice outstanding balance');
+      const alreadyAllocated = this.paymentsRepository.sumAllocatedForPayment(tenantId, paymentId);
+      const requestedTotal = data.allocations.reduce((sum, item) => sum + item.allocated_minor, 0);
+      if (alreadyAllocated + requestedTotal > payment.amount_received_minor) {
+        throw new ConflictException('Allocated total must not exceed payment amount');
       }
-    }
 
-    const touchedInvoiceIds = new Set<string>();
-    for (const item of data.allocations) {
-      this.paymentsRepository.createAllocation({
+      for (const item of data.allocations) {
+        const invoice = this.requireAllocatableInvoice(tenantId, item.invoice_id, payment);
+        const invoiceAllocated = this.paymentsRepository.sumAllocatedForInvoice(tenantId, invoice.id);
+        const invoiceOutstanding = invoice.total_minor - invoiceAllocated;
+        if (item.allocated_minor > invoiceOutstanding) {
+          throw new ConflictException('Allocated total must not exceed invoice outstanding balance');
+        }
+      }
+
+      const touchedInvoiceIds = new Set<string>();
+      for (const item of data.allocations) {
+        this.paymentsRepository.createAllocation({
         tenant_id: tenantId,
         payment_id: paymentId,
         invoice_id: item.invoice_id,
@@ -100,16 +103,16 @@ export class PaymentsService {
         allocation_date: item.allocation_date ?? new Date().toISOString().slice(0, 10),
         metadata: null
       });
-      touchedInvoiceIds.add(item.invoice_id);
-    }
+        touchedInvoiceIds.add(item.invoice_id);
+      }
 
-    this.refreshPaymentAllocationBalance(tenantId, paymentId);
+      this.refreshPaymentAllocationBalance(tenantId, paymentId);
 
-    for (const invoiceId of touchedInvoiceIds) {
-      this.syncInvoicePaymentStatus(tenantId, invoiceId);
-    }
+      for (const invoiceId of touchedInvoiceIds) {
+        this.syncInvoicePaymentStatus(tenantId, invoiceId);
+      }
 
-    this.eventsService.logEvent({
+      this.eventsService.logEvent({
       tenant_id: tenantId,
       event_type: 'payment_allocated',
       event_category: 'financial',
@@ -120,7 +123,8 @@ export class PaymentsService {
       idempotency_key: idempotencyKey ?? null
     });
 
-    return this.getPayment(tenantId, paymentId);
+      return this.getPayment(tenantId, paymentId);
+    }, this.financialParticipants());
   }
 
   voidPayment(tenantId: string, paymentId: string, idempotencyKey?: string): PaymentDetails {
@@ -129,19 +133,19 @@ export class PaymentsService {
       return this.getPayment(tenantId, paymentId);
     }
 
-    const removedAllocations = this.paymentsRepository.deleteAllocationsByPayment(tenantId, paymentId);
-    this.paymentsRepository.update(tenantId, paymentId, {
-      status: 'void',
-      allocated_minor: 0,
-      unallocated_minor: payment.amount_received_minor
-    });
+      const removedAllocations = this.paymentsRepository.deleteAllocationsByPayment(tenantId, paymentId);
+      this.paymentsRepository.update(tenantId, paymentId, {
+        status: 'void',
+        allocated_minor: 0,
+        unallocated_minor: payment.amount_received_minor
+      });
 
-    const touchedInvoiceIds = new Set(removedAllocations.map((allocation) => allocation.invoice_id));
-    for (const invoiceId of touchedInvoiceIds) {
-      this.syncInvoicePaymentStatus(tenantId, invoiceId);
-    }
+      const touchedInvoiceIds = new Set(removedAllocations.map((allocation) => allocation.invoice_id));
+      for (const invoiceId of touchedInvoiceIds) {
+        this.syncInvoicePaymentStatus(tenantId, invoiceId);
+      }
 
-    this.eventsService.logEvent({
+      this.eventsService.logEvent({
       tenant_id: tenantId,
       event_type: 'payment_voided',
       event_category: 'financial',
@@ -152,7 +156,28 @@ export class PaymentsService {
       idempotency_key: idempotencyKey ?? null
     });
 
-    return this.getPayment(tenantId, paymentId);
+      return this.getPayment(tenantId, paymentId);
+    }, this.financialParticipants());
+  }
+
+  private financialParticipants(): TransactionParticipant[] {
+    return [
+      {
+        key: 'payments',
+        snapshot: () => this.paymentsRepository.createSnapshot(),
+        restore: (snapshot) => this.paymentsRepository.restoreSnapshot(snapshot as ReturnType<PaymentsRepository['createSnapshot']>)
+      },
+      {
+        key: 'invoices',
+        snapshot: () => this.invoicesRepository.createSnapshot(),
+        restore: (snapshot) => this.invoicesRepository.restoreSnapshot(snapshot as ReturnType<InvoicesRepository['createSnapshot']>)
+      },
+      {
+        key: 'events',
+        snapshot: () => this.eventsService.createSnapshot(),
+        restore: (snapshot) => this.eventsService.restoreSnapshot(snapshot as ReturnType<EventsService['createSnapshot']>)
+      }
+    ];
   }
 
   private refreshPaymentAllocationBalance(tenantId: string, paymentId: string): void {
