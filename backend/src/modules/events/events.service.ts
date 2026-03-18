@@ -38,9 +38,14 @@ export class EventsService {
     tenantId: string,
     consumerName: string,
     eventId: string,
-    handler: () => Promise<T> | T
+    handler: (event: DomainEvent) => Promise<T> | T
   ): Promise<T | null> {
-    return this.eventConsumerIdempotencyService.execute(tenantId, consumerName, eventId, handler);
+    const event = this.getEvent(tenantId, eventId);
+    if (!event) {
+      throw new BadRequestException(`Event not found: ${eventId}`);
+    }
+
+    return this.eventConsumerIdempotencyService.execute(event, consumerName, () => handler(event));
   }
 
   createSnapshot(): ReturnType<EventsRepository['createSnapshot']> {

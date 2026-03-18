@@ -171,12 +171,7 @@ export class LedgerService {
         }
       }
 
-      return this.eventsService.consumeEventOnce(normalizedTenantId, `ledger-posting:${normalizedRuleVersion}`, eventId, async () => {
-        const event = this.eventsService.getEvent(normalizedTenantId, eventId);
-        if (!event) {
-          throw new BadRequestException(`Event not found: ${eventId}`);
-        }
-
+      return this.eventsService.consumeEventOnce(normalizedTenantId, `ledger-posting:${normalizedRuleVersion}`, eventId, async (event) => {
         const existing = this.ledgerRepository.findBySourceEvent(normalizedTenantId, event.id, normalizedRuleVersion);
         if (existing) {
           if (normalizedRequestKey) {
