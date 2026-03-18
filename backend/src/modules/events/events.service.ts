@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { EventConsumerIdempotencyService } from '../idempotency/event-consumer-idempotency.service';
 import { QueryEventsDto } from './dto/query-events.dto';
+import { EventBusService, EventHandler, EventSubscription } from './event-bus.service';
 import { createDomainEvent, CreateDomainEventInput, DomainEvent, DomainEventType } from './entities/event.entity';
 import { EventsRepository } from './events.repository';
 import { validateDomainEvent } from './domain-event.validator';
@@ -9,7 +10,8 @@ import { validateDomainEvent } from './domain-event.validator';
 export class EventsService {
   constructor(
     private readonly eventsRepository: EventsRepository,
-    private readonly eventConsumerIdempotencyService: EventConsumerIdempotencyService
+    private readonly eventConsumerIdempotencyService: EventConsumerIdempotencyService,
+    private readonly eventBusService: EventBusService
   ) {}
 
   listEvents(tenantId: string, query: QueryEventsDto): DomainEvent[] {
@@ -31,7 +33,22 @@ export class EventsService {
     });
 
     validateDomainEvent(event);
-    return this.eventsRepository.create(event) as DomainEvent<TEventType>;
+    const persistedEvent = this.eventsRepository.create(event) as DomainEvent<TEventType>;
+    void this.eventBusService.publish(persistedEvent);
+    return persistedEvent;
+  }
+
+  publish<TEventType extends DomainEventType>(event: DomainEvent<TEventType>): Promise<void> {
+    validateDomainEvent(event);
+    return this.eventBusService.publish(event);
+  }
+
+  subscribe<TEventType extends DomainEventType>(eventType: TEventType, handler: EventHandler<TEventType>): EventSubscription {
+    return this.eventBusService.subscribe(eventType, handler);
+  }
+
+  waitForIdle(): Promise<void> {
+    return this.eventBusService.waitForIdle();
   }
 
   consumeEventOnce<T>(
