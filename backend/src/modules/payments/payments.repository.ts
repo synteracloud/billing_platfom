@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PaymentAllocationEntity } from './entities/payment-allocation.entity';
 import { PaymentEntity } from './entities/payment.entity';
@@ -24,6 +24,19 @@ export class PaymentsRepository {
   }
 
   create(payment: Omit<PaymentEntity, 'id' | 'created_at' | 'updated_at'>): PaymentEntity {
+    if (payment.payment_reference) {
+      const duplicate = [...this.payments.values()].find(
+        (existing) =>
+          existing.tenant_id === payment.tenant_id &&
+          existing.payment_reference !== null &&
+          existing.payment_reference === payment.payment_reference
+      );
+
+      if (duplicate) {
+        throw new ConflictException('Unique constraint violation for (tenant_id, payment_reference)');
+      }
+    }
+
     const now = new Date().toISOString();
     const created: PaymentEntity = {
       ...payment,
@@ -46,6 +59,18 @@ export class PaymentsRepository {
       return undefined;
     }
 
+    if (patch.payment_reference && patch.payment_reference !== existing.payment_reference) {
+      const duplicate = [...this.payments.values()].find(
+        (payment) =>
+          payment.tenant_id === tenantId &&
+          payment.payment_reference === patch.payment_reference &&
+          payment.id !== paymentId
+      );
+      if (duplicate) {
+        throw new ConflictException('Unique constraint violation for (tenant_id, payment_reference)');
+      }
+    }
+
     const updated: PaymentEntity = {
       ...existing,
       ...patch,
@@ -57,6 +82,24 @@ export class PaymentsRepository {
   }
 
   createAllocation(allocation: Omit<PaymentAllocationEntity, 'id' | 'created_at' | 'updated_at'>): PaymentAllocationEntity {
+    const payment = this.payments.get(allocation.payment_id);
+    if (!payment || payment.tenant_id !== allocation.tenant_id) {
+      throw new ConflictException('Foreign key violation for payment_id');
+    }
+
+    const duplicate = [...this.allocations.values()].find(
+      (existing) =>
+        existing.tenant_id === allocation.tenant_id &&
+        existing.payment_id === allocation.payment_id &&
+        existing.invoice_id === allocation.invoice_id &&
+        existing.allocated_minor === allocation.allocated_minor &&
+        existing.allocation_date === allocation.allocation_date
+    );
+
+    if (duplicate) {
+      throw new ConflictException('Unique constraint violation for duplicate payment allocation tuple');
+    }
+
     const now = new Date().toISOString();
     const created: PaymentAllocationEntity = {
       ...allocation,

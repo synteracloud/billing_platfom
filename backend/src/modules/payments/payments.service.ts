@@ -29,37 +29,43 @@ export class PaymentsService {
   }
 
   createPayment(tenantId: string, data: CreatePaymentDto, idempotencyKey?: string): PaymentDetails {
-    this.validateCreatePayload(data);
-    this.customersService.getCustomer(tenantId, data.customer_id);
+    return this.transactionManager.wrapper(() => {
+      this.validateCreatePayload(data);
+      this.customersService.getCustomer(tenantId, data.customer_id);
 
       const payment = this.paymentsRepository.create({
-      tenant_id: tenantId,
-      customer_id: data.customer_id,
-      payment_reference: data.payment_reference?.trim() || null,
-      payment_date: data.payment_date,
-      currency: data.currency.trim().toUpperCase(),
-      amount_received_minor: data.amount_received_minor,
-      allocated_minor: 0,
-      unallocated_minor: data.amount_received_minor,
-      payment_method: data.payment_method.trim(),
-      status: 'recorded',
-      metadata: data.metadata ?? null
-    });
+        tenant_id: tenantId,
+        customer_id: data.customer_id,
+        payment_reference: data.payment_reference?.trim() || null,
+        payment_date: data.payment_date,
+        currency: data.currency.trim().toUpperCase(),
+        amount_received_minor: data.amount_received_minor,
+        allocated_minor: 0,
+        unallocated_minor: data.amount_received_minor,
+        payment_method: data.payment_method.trim(),
+        status: 'recorded',
+        metadata: data.metadata ?? null
+      });
 
-    if (data.allocations && data.allocations.length > 0) {
-      this.allocatePayment(tenantId, payment.id, { allocations: data.allocations }, idempotencyKey);
-    }
+      if (data.allocations && data.allocations.length > 0) {
+        this.allocatePayment(tenantId, payment.id, { allocations: data.allocations }, idempotencyKey);
+      }
 
       this.eventsService.logEvent({
-      tenant_id: tenantId,
-      event_type: 'payment_recorded',
-      event_category: 'financial',
-      entity_type: 'payment',
-      entity_id: payment.id,
-      actor_type: 'system',
-      payload: { amount_received_minor: payment.amount_received_minor },
-      idempotency_key: idempotencyKey ?? null
-    });
+        tenant_id: tenantId,
+        type: 'billing.payment.recorded.v1',
+        aggregate_type: 'payment',
+        aggregate_id: payment.id,
+        aggregate_version: 1,
+        idempotency_key: idempotencyKey,
+        payload: {
+          payment_id: payment.id,
+          customer_id: payment.customer_id,
+          amount_minor: payment.amount_received_minor,
+          currency_code: payment.currency,
+          status: payment.status
+        }
+      });
 
       return this.getPayment(tenantId, payment.id);
     }, this.financialParticipants());
@@ -75,8 +81,9 @@ export class PaymentsService {
   }
 
   allocatePayment(tenantId: string, paymentId: string, data: AllocatePaymentDto, idempotencyKey?: string): PaymentDetails {
-    const payment = this.requireAllocatablePayment(tenantId, paymentId);
-    this.validateAllocatePayload(data);
+    return this.transactionManager.wrapper(() => {
+      const payment = this.requireAllocatablePayment(tenantId, paymentId);
+      this.validateAllocatePayload(data);
 
       const alreadyAllocated = this.paymentsRepository.sumAllocatedForPayment(tenantId, paymentId);
       const requestedTotal = data.allocations.reduce((sum, item) => sum + item.allocated_minor, 0);
@@ -96,13 +103,13 @@ export class PaymentsService {
       const touchedInvoiceIds = new Set<string>();
       for (const item of data.allocations) {
         this.paymentsRepository.createAllocation({
-        tenant_id: tenantId,
-        payment_id: paymentId,
-        invoice_id: item.invoice_id,
-        allocated_minor: item.allocated_minor,
-        allocation_date: item.allocation_date ?? new Date().toISOString().slice(0, 10),
-        metadata: null
-      });
+          tenant_id: tenantId,
+          payment_id: paymentId,
+          invoice_id: item.invoice_id,
+          allocated_minor: item.allocated_minor,
+          allocation_date: item.allocation_date ?? new Date().toISOString().slice(0, 10),
+          metadata: null
+        });
         touchedInvoiceIds.add(item.invoice_id);
       }
 
@@ -112,26 +119,33 @@ export class PaymentsService {
         this.syncInvoicePaymentStatus(tenantId, invoiceId);
       }
 
-      this.eventsService.logEvent({
-      tenant_id: tenantId,
-      event_type: 'payment_allocated',
-      event_category: 'financial',
-      entity_type: 'payment',
-      entity_id: paymentId,
-      actor_type: 'system',
-      payload: { allocations: data.allocations.length },
-      idempotency_key: idempotencyKey ?? null
-    });
+      const updatedPayment = this.getPayment(tenantId, paymentId);
 
-      return this.getPayment(tenantId, paymentId);
+      this.eventsService.logEvent({
+        tenant_id: tenantId,
+        type: 'billing.payment.allocated.v1',
+        aggregate_type: 'payment_allocation',
+        aggregate_id: paymentId,
+        aggregate_version: Math.max(1, updatedPayment.allocations.length),
+        idempotency_key: idempotencyKey,
+        payload: {
+          payment_id: paymentId,
+          allocation_count: data.allocations.length,
+          total_allocated_minor: requestedTotal,
+          currency_code: payment.currency
+        }
+      });
+
+      return updatedPayment;
     }, this.financialParticipants());
   }
 
   voidPayment(tenantId: string, paymentId: string, idempotencyKey?: string): PaymentDetails {
-    const payment = this.getPaymentRecord(tenantId, paymentId);
-    if (payment.status === 'void') {
-      return this.getPayment(tenantId, paymentId);
-    }
+    return this.transactionManager.wrapper(() => {
+      const payment = this.getPaymentRecord(tenantId, paymentId);
+      if (payment.status === 'void') {
+        return this.getPayment(tenantId, paymentId);
+      }
 
       const removedAllocations = this.paymentsRepository.deleteAllocationsByPayment(tenantId, paymentId);
       this.paymentsRepository.update(tenantId, paymentId, {
@@ -146,15 +160,19 @@ export class PaymentsService {
       }
 
       this.eventsService.logEvent({
-      tenant_id: tenantId,
-      event_type: 'payment_voided',
-      event_category: 'financial',
-      entity_type: 'payment',
-      entity_id: paymentId,
-      actor_type: 'system',
-      payload: {},
-      idempotency_key: idempotencyKey ?? null
-    });
+        tenant_id: tenantId,
+        type: 'billing.payment.refunded.v1',
+        aggregate_type: 'payment',
+        aggregate_id: paymentId,
+        aggregate_version: 3,
+        idempotency_key: idempotencyKey,
+        payload: {
+          payment_id: paymentId,
+          refunded_at: new Date().toISOString(),
+          amount_minor: payment.amount_received_minor,
+          currency_code: payment.currency
+        }
+      });
 
       return this.getPayment(tenantId, paymentId);
     }, this.financialParticipants());
