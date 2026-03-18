@@ -120,12 +120,25 @@ export class LedgerService {
       };
 
       const created = this.ledgerRepository.create(entry, lines);
+      this.eventsService.logMutation({
+        tenant_id: normalized.tenant_id,
+        entity_type: 'journal_entry',
+        entity_id: created.id,
+        action: 'posted',
+        aggregate_version: 1,
+        correlation_id: normalized.source_id,
+        causation_id: normalized.source_event_id,
+        idempotency_key: `audit:journal_entry:${normalized.source_event_id}:${normalized.rule_version}`,
+        payload: { after: created, lines: created.lines, source_event_id: normalized.source_event_id }
+      });
       this.eventsService.logEvent({
         tenant_id: normalized.tenant_id,
         type: 'accounting.journal.posted.v1',
         aggregate_type: 'journal_entry',
         aggregate_id: created.id,
         aggregate_version: 1,
+        correlation_id: normalized.source_id,
+        causation_id: normalized.source_event_id,
         idempotency_key: `accounting.journal.posted.v1:${normalized.source_event_id}:${normalized.rule_version}`,
         payload: {
           journal_entry_id: created.id,

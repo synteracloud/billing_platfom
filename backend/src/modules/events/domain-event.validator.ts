@@ -1,15 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
 import {
+  AuditPayload,
   CANONICAL_EVENT_TYPES,
+  CanonicalDomainEventType,
   DomainEvent,
-  DomainEventPayloadMap,
-  DomainEventType
+  DomainEventPayloadMap
 } from './entities/event.entity';
 
 const EVENT_TYPE_SET = new Set<string>(CANONICAL_EVENT_TYPES);
 
 const payloadValidators: {
-  [T in DomainEventType]: (payload: DomainEventPayloadMap[T]) => void;
+  [T in CanonicalDomainEventType]: (payload: DomainEventPayloadMap[T]) => void;
 } = {
   'billing.invoice.created.v1': (payload) => {
     requireString(payload.invoice_id, 'payload.invoice_id');
@@ -109,27 +110,54 @@ const payloadValidators: {
 export function validateDomainEvent(event: DomainEvent): void {
   requireString(event.id, 'id');
   requireString(event.type, 'type');
+  requireString(event.event_type, 'event_type');
   requireString(event.tenant_id, 'tenant_id');
   requireString(event.occurred_at, 'occurred_at');
   requireString(event.recorded_at, 'recorded_at');
   requireString(event.aggregate_type, 'aggregate_type');
   requireString(event.aggregate_id, 'aggregate_id');
+  requireString(event.entity_type, 'entity_type');
+  requireString(event.entity_id, 'entity_id');
+  requireString(event.event_category, 'event_category');
+  requireString(event.actor_type, 'actor_type');
+  requireString(event.action, 'action');
+  requireString(event.timestamp, 'timestamp');
   requireNumber(event.aggregate_version, 'aggregate_version');
   requireString(event.idempotency_key, 'idempotency_key');
   requireString(event.producer, 'producer');
   requireNumber(event.version, 'version');
 
-  if (!EVENT_TYPE_SET.has(event.type)) {
-    throw new BadRequestException(`type is not in canonical event catalog: ${event.type}`);
-  }
-
-  const expectedVersion = parseInt(event.type.split('.v').at(-1) ?? '1', 10);
+  const expectedVersion = parseInt(event.type.split('.v').slice(-1)[0] ?? '1', 10);
   if (event.version !== expectedVersion) {
     throw new BadRequestException('version must match event type suffix');
   }
 
-  const validator = payloadValidators[event.type];
-  validator(event.payload as never);
+  if (event.type.startsWith('audit.')) {
+    validateAuditPayload(event.payload as AuditPayload);
+    return;
+  }
+
+  if (!EVENT_TYPE_SET.has(event.type)) {
+    throw new BadRequestException(`type is not in canonical event catalog: ${event.type}`);
+  }
+
+  payloadValidators[event.type as CanonicalDomainEventType](event.payload as never);
+}
+
+function validateAuditPayload(payload: AuditPayload): void {
+  if (!payload || typeof payload !== 'object') {
+    throw new BadRequestException('payload is required');
+  }
+
+  requireString(payload.action, 'payload.action');
+  requireString(payload.entity.type, 'payload.entity.type');
+  requireString(payload.entity.id, 'payload.entity.id');
+  requireString(payload.actor.type, 'payload.actor.type');
+  requireString(payload.timestamp, 'payload.timestamp');
+
+  if (!payload.payload || typeof payload.payload !== 'object') {
+    throw new BadRequestException('payload.payload is required');
+  }
 }
 
 function requireString(value: unknown, field: string): void {

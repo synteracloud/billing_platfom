@@ -13,15 +13,14 @@ export class EventsRepository {
     if (existingEventId) {
       const existing = this.events.get(existingEventId);
       if (existing) {
-        return existing;
+        return this.clone(existing);
       }
     }
 
-    this.events.set(event.id, event);
+    this.events.set(event.id, this.deepFreeze(this.clone(event)));
     this.eventIdempotencyIndex.set(compositeIdempotency, event.id);
-    return event;
+    return this.clone(this.events.get(event.id)!);
   }
-
 
   findById(tenantId: string, eventId: string): DomainEvent | undefined {
     const event = this.events.get(eventId);
@@ -39,12 +38,17 @@ export class EventsRepository {
   listByTenant(tenantId: string, query: QueryEventsDto): DomainEvent[] {
     const fromDate = query.occurred_at_from ? new Date(query.occurred_at_from) : null;
     const toDate = query.occurred_at_to ? new Date(query.occurred_at_to) : null;
+    const requestedType = query.type ?? query.event_type;
+    const requestedEntityType = query.aggregate_type ?? query.entity_type;
+    const requestedEntityId = query.aggregate_id ?? query.entity_id;
 
     return [...this.events.values()]
       .filter((event) => event.tenant_id === tenantId)
-      .filter((event) => !query.type || event.type === query.type)
-      .filter((event) => !query.aggregate_type || event.aggregate_type === query.aggregate_type)
-      .filter((event) => !query.aggregate_id || event.aggregate_id === query.aggregate_id)
+      .filter((event) => !requestedType || event.type === requestedType)
+      .filter((event) => !query.event_category || event.event_category === query.event_category)
+      .filter((event) => !requestedEntityType || event.entity_type === requestedEntityType)
+      .filter((event) => !requestedEntityId || event.entity_id === requestedEntityId)
+      .filter((event) => !query.actor_type || event.actor_type === query.actor_type)
       .filter((event) => !query.correlation_id || event.correlation_id === query.correlation_id)
       .filter((event) => {
         const occurred = new Date(event.occurred_at);
@@ -58,12 +62,13 @@ export class EventsRepository {
 
         return true;
       })
-      .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+      .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
+      .map((event) => this.clone(event));
   }
 
   createSnapshot(): { events: Map<string, DomainEvent>; eventIdempotencyIndex: Map<string, string> } {
     return {
-      events: new Map([...this.events.entries()].map(([id, event]) => [id, this.clone(event)])),
+      events: new Map([...this.events.entries()].map(([id, event]) => [id, this.deepFreeze(this.clone(event))])),
       eventIdempotencyIndex: new Map(this.eventIdempotencyIndex.entries())
     };
   }
@@ -73,7 +78,7 @@ export class EventsRepository {
     this.eventIdempotencyIndex.clear();
 
     for (const [id, event] of snapshot.events.entries()) {
-      this.events.set(id, this.clone(event));
+      this.events.set(id, this.deepFreeze(this.clone(event)));
     }
 
     for (const [key, value] of snapshot.eventIdempotencyIndex.entries()) {
@@ -91,5 +96,16 @@ export class EventsRepository {
 
   private clone<T>(value: T): T {
     return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  private deepFreeze<T>(value: T): T {
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+      Object.freeze(value);
+      for (const nested of Object.values(value as Record<string, unknown>)) {
+        this.deepFreeze(nested);
+      }
+    }
+
+    return value;
   }
 }

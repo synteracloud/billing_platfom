@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "outDir": "dist-audit-test",
+    "rootDir": "."
+  },
+  "include": [
+    "tests/audit-chain.test.ts",
+    "src/common/transactions/**/*.ts",
+    "src/modules/customers/**/*.ts",
+    "src/modules/idempotency/**/*.ts",
+    "src/modules/events/**/*.ts",
+    "src/modules/invoices/**/*.ts",
+    "src/modules/payments/**/*.ts",
+    "src/modules/ledger/**/*.ts",
+    "src/modules/accounting/**/*.ts"
+  ]
+}
