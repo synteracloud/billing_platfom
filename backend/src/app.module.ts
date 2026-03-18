@@ -31,6 +31,7 @@ import { UsersModule } from './modules/users/module';
     InvoicesModule,
     LedgerModule,
     PaymentsModule,
+    LedgerModule,
     SubscriptionsModule,
     DocumentsModule,
     EventsModule,

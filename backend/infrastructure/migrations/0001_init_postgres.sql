@@ -286,3 +286,4 @@ CREATE INDEX idx_ledger_account_tenant ON ledger_account (tenant_id);
 CREATE INDEX idx_ledger_account_tenant_type ON ledger_account (tenant_id, type);
 CREATE INDEX idx_ledger_account_tenant_parent ON ledger_account (tenant_id, parent_id);
 CREATE INDEX idx_journal_line_tenant_entry ON journal_line (tenant_id, journal_entry_id);
+CREATE INDEX idx_journal_line_tenant_account_entry ON journal_line (tenant_id, account_code, journal_entry_id);
