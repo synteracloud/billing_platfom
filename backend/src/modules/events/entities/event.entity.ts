@@ -1,31 +1,222 @@
-export type EventCategory = 'audit' | 'financial' | 'integration';
-export type ActorType = 'user' | 'system';
+import { randomUUID } from 'crypto';
 
-export type EventType =
-  | 'invoice_created'
-  | 'invoice_issued'
-  | 'invoice_voided'
-  | 'payment_recorded'
-  | 'payment_allocated'
-  | 'payment_voided'
-  | 'subscription_created'
-  | 'subscription_cancelled'
-  | 'document_generated'
-  | 'document_sent';
+export const CANONICAL_EVENT_TYPES = [
+  'billing.invoice.created.v1',
+  'billing.invoice.issued.v1',
+  'billing.invoice.voided.v1',
+  'billing.payment.recorded.v1',
+  'billing.payment.settled.v1',
+  'billing.payment.allocated.v1',
+  'billing.payment.refunded.v1',
+  'accounting.journal.posted.v1',
+  'accounting.journal.reversed.v1',
+  'subledger.receivable.updated.v1',
+  'subledger.payable.updated.v1',
+  'subledger.aging.snapshotted.v1',
+  'integration.record.normalized.v1',
+  'recon.run.completed.v1',
+  'recon.match.classified.v1'
+] as const;
 
-export interface EventEntity {
+export type DomainEventType = (typeof CANONICAL_EVENT_TYPES)[number];
+
+export type DomainAggregateType =
+  | 'invoice'
+  | 'payment'
+  | 'payment_allocation'
+  | 'journal_entry'
+  | 'receivable_position'
+  | 'payable_position'
+  | 'normalized_record'
+  | 'reconciliation_run'
+  | 'reconciliation_result'
+  | 'document'
+  | 'subscription';
+
+export type InvoiceCreatedPayload = {
+  invoice_id: string;
+  customer_id: string;
+  invoice_number: string;
+  status: 'draft' | 'issued' | 'partially_paid' | 'paid' | 'void';
+  total_minor: number;
+  currency_code: string;
+};
+
+export type InvoiceIssuedPayload = {
+  invoice_id: string;
+  issue_date: string;
+  due_date: string | null;
+  total_minor: number;
+  currency_code: string;
+};
+
+export type InvoiceVoidedPayload = {
+  invoice_id: string;
+  voided_at: string;
+  reason: string | null;
+};
+
+export type PaymentRecordedPayload = {
+  payment_id: string;
+  customer_id: string;
+  amount_minor: number;
+  currency_code: string;
+  status: 'recorded' | 'pending_settlement' | 'settled' | 'failed' | 'refunded' | 'void';
+};
+
+export type PaymentSettledPayload = {
+  payment_id: string;
+  settled_at: string;
+  amount_minor: number;
+  currency_code: string;
+};
+
+export type PaymentAllocatedPayload = {
+  payment_id: string;
+  allocation_count: number;
+  total_allocated_minor: number;
+  currency_code: string;
+};
+
+export type PaymentRefundedPayload = {
+  payment_id: string;
+  refunded_at: string;
+  amount_minor: number;
+  currency_code: string;
+};
+
+export type JournalPostedPayload = {
+  journal_entry_id: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  currency_code: string;
+  line_count: number;
+};
+
+export type JournalReversedPayload = {
+  journal_entry_id: string;
+  reversed_by_journal_entry_id: string;
+  reason: string | null;
+};
+
+export type ReceivableUpdatedPayload = {
+  receivable_position_id: string;
+  customer_id: string;
+  open_amount_minor: number;
+  currency_code: string;
+};
+
+export type PayableUpdatedPayload = {
+  payable_position_id: string;
+  vendor_id: string;
+  open_amount_minor: number;
+  currency_code: string;
+};
+
+export type AgingSnapshottedPayload = {
+  snapshot_id: string;
+  as_of_at: string;
+  bucket_0_30_minor: number;
+  bucket_31_60_minor: number;
+  bucket_61_90_minor: number;
+  bucket_91_plus_minor: number;
+  currency_code: string;
+};
+
+export type IntegrationRecordNormalizedPayload = {
+  normalized_record_id: string;
+  source_system: string;
+  source_record_id: string;
+  canonical_entity: string;
+  amount_minor: number | null;
+  currency_code: string | null;
+};
+
+export type ReconRunCompletedPayload = {
+  reconciliation_run_id: string;
+  started_at: string;
+  completed_at: string;
+  matched_count: number;
+  unmatched_count: number;
+};
+
+export type ReconMatchClassifiedPayload = {
+  reconciliation_result_id: string;
+  reconciliation_run_id: string;
+  classification: 'match' | 'partial_match' | 'mismatch';
+  confidence_score: number;
+};
+
+export type DomainEventPayloadMap = {
+  'billing.invoice.created.v1': InvoiceCreatedPayload;
+  'billing.invoice.issued.v1': InvoiceIssuedPayload;
+  'billing.invoice.voided.v1': InvoiceVoidedPayload;
+  'billing.payment.recorded.v1': PaymentRecordedPayload;
+  'billing.payment.settled.v1': PaymentSettledPayload;
+  'billing.payment.allocated.v1': PaymentAllocatedPayload;
+  'billing.payment.refunded.v1': PaymentRefundedPayload;
+  'accounting.journal.posted.v1': JournalPostedPayload;
+  'accounting.journal.reversed.v1': JournalReversedPayload;
+  'subledger.receivable.updated.v1': ReceivableUpdatedPayload;
+  'subledger.payable.updated.v1': PayableUpdatedPayload;
+  'subledger.aging.snapshotted.v1': AgingSnapshottedPayload;
+  'integration.record.normalized.v1': IntegrationRecordNormalizedPayload;
+  'recon.run.completed.v1': ReconRunCompletedPayload;
+  'recon.match.classified.v1': ReconMatchClassifiedPayload;
+};
+
+export interface DomainEvent<TEventType extends DomainEventType = DomainEventType> {
   id: string;
+  type: TEventType;
+  version: number;
   tenant_id: string;
-  event_type: EventType;
-  event_category: EventCategory;
-  entity_type: string;
-  entity_id: string;
-  actor_type: ActorType;
-  actor_id: string | null;
+  payload: DomainEventPayloadMap[TEventType];
   occurred_at: string;
-  payload: Record<string, unknown>;
+  recorded_at: string;
+  aggregate_type: DomainAggregateType;
+  aggregate_id: string;
+  aggregate_version: number;
+  causation_id: string | null;
   correlation_id: string | null;
-  idempotency_key: string | null;
-  created_at: string;
-  updated_at: string;
+  idempotency_key: string;
+  producer: string;
+}
+
+export interface CreateDomainEventInput<TEventType extends DomainEventType = DomainEventType> {
+  type: TEventType;
+  tenant_id: string;
+  payload: DomainEventPayloadMap[TEventType];
+  aggregate_type: DomainAggregateType;
+  aggregate_id: string;
+  aggregate_version: number;
+  occurred_at?: string;
+  causation_id?: string | null;
+  correlation_id?: string | null;
+  idempotency_key?: string;
+  producer?: string;
+}
+
+export function createDomainEvent<TEventType extends DomainEventType>(
+  input: CreateDomainEventInput<TEventType>
+): DomainEvent<TEventType> {
+  const now = new Date().toISOString();
+  const version = parseInt(input.type.split('.v').at(-1) ?? '1', 10);
+
+  return {
+    id: randomUUID(),
+    type: input.type,
+    version,
+    tenant_id: input.tenant_id,
+    payload: input.payload,
+    occurred_at: input.occurred_at ?? now,
+    recorded_at: now,
+    aggregate_type: input.aggregate_type,
+    aggregate_id: input.aggregate_id,
+    aggregate_version: input.aggregate_version,
+    causation_id: input.causation_id ?? null,
+    correlation_id: input.correlation_id ?? null,
+    idempotency_key: input.idempotency_key ?? `${input.type}:${input.aggregate_id}:${input.aggregate_version}`,
+    producer: input.producer ?? 'billing-platform'
+  };
 }
