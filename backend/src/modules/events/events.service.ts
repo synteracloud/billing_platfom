@@ -43,6 +43,14 @@ export class EventsService {
     });
   }
 
+  createSnapshot(): { events: Map<string, EventEntity> } {
+    return this.eventsRepository.createSnapshot();
+  }
+
+  restoreSnapshot(snapshot: { events: Map<string, EventEntity> }): void {
+    this.eventsRepository.restoreSnapshot(snapshot);
+  }
+
   private validateCreateInput(input: CreateEventInput): void {
     if (!input.tenant_id || input.tenant_id.trim().length === 0) {
       throw new BadRequestException('tenant_id is required');

@@ -46,4 +46,21 @@ export class EventsRepository {
       })
       .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
   }
+
+  createSnapshot(): { events: Map<string, EventEntity> } {
+    return {
+      events: new Map([...this.events.entries()].map(([id, event]) => [id, this.clone(event)]))
+    };
+  }
+
+  restoreSnapshot(snapshot: { events: Map<string, EventEntity> }): void {
+    this.events.clear();
+    for (const [id, event] of snapshot.events.entries()) {
+      this.events.set(id, this.clone(event));
+    }
+  }
+
+  private clone<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
 }
