@@ -1,0 +1,1 @@
+export const EVENT_QUEUE_DRIVER = Symbol('EVENT_QUEUE_DRIVER');

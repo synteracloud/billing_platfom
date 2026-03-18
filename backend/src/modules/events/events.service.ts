@@ -1,15 +1,19 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { EventConsumerIdempotencyService } from '../idempotency/event-consumer-idempotency.service';
 import { QueryEventsDto } from './dto/query-events.dto';
 import { createDomainEvent, CreateDomainEventInput, DomainEvent, DomainEventType } from './entities/event.entity';
 import { EventsRepository } from './events.repository';
 import { validateDomainEvent } from './domain-event.validator';
+import { EventQueuePublisher } from './queue/event-queue.publisher';
 
 @Injectable()
 export class EventsService {
+  private readonly logger = new Logger(EventsService.name);
+
   constructor(
     private readonly eventsRepository: EventsRepository,
-    private readonly eventConsumerIdempotencyService: EventConsumerIdempotencyService
+    private readonly eventConsumerIdempotencyService: EventConsumerIdempotencyService,
+    private readonly eventQueuePublisher: EventQueuePublisher
   ) {}
 
   listEvents(tenantId: string, query: QueryEventsDto): DomainEvent[] {
@@ -31,7 +35,11 @@ export class EventsService {
     });
 
     validateDomainEvent(event);
-    return this.eventsRepository.create(event) as DomainEvent<TEventType>;
+    const storedEvent = this.eventsRepository.create(event) as DomainEvent<TEventType>;
+    void this.eventQueuePublisher.publish(storedEvent).catch((error: Error) => {
+      this.logger.error(`Failed to enqueue domain event ${storedEvent.id}: ${error.message}`);
+    });
+    return storedEvent;
   }
 
   consumeEventOnce<T>(
