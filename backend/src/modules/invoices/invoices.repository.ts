@@ -8,6 +8,10 @@ export class InvoicesRepository {
   private readonly invoices = new Map<string, InvoiceEntity>();
   private readonly invoiceLines = new Map<string, InvoiceLineEntity>();
 
+  listAll(): InvoiceEntity[] {
+    return [...this.invoices.values()].map((invoice) => this.clone(invoice));
+  }
+
   listByTenant(tenantId: string): InvoiceEntity[] {
     return [...this.invoices.values()]
       .filter((invoice) => invoice.tenant_id === tenantId)

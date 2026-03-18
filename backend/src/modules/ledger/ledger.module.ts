@@ -5,8 +5,8 @@ import { LedgerRepository } from './ledger.repository';
 import { LedgerService } from './ledger.service';
 
 @Module({
-  imports: [TransactionsModule, EventsModule],
+  imports: [EventsModule, TransactionsModule],
   providers: [LedgerRepository, LedgerService],
-  exports: [LedgerRepository, LedgerService]
+  exports: [LedgerService]
 })
 export class LedgerModule {}

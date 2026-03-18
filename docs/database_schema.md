@@ -356,7 +356,42 @@
 
 ---
 
-### 2.10 `document`
+### 2.10 `ledger_account`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `code TEXT NOT NULL`
+- `name TEXT NOT NULL`
+- `type TEXT NOT NULL` (`asset`, `liability`, `equity`, `revenue`, `expense`)
+- `parent_id UUID NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, parent_id) -> ledger_account(tenant_id, id)` (nullable self-reference for chart-of-accounts hierarchy)
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (supports tenant-safe composite foreign keys)
+- `UNIQUE (tenant_id, code)`
+
+**Checks / invariants**
+- `CHECK (type IN ('asset', 'liability', 'equity', 'revenue', 'expense'))`
+- `CHECK (parent_id IS NULL OR parent_id <> id)`
+- Parent/child relationships are tenant-scoped, preventing cross-tenant hierarchies.
+- Codes should be normalized and matched to the tenant's chart of accounts before journal posting.
+
+**Key indexes**
+- `INDEX (tenant_id)`
+- `INDEX (tenant_id, type)`
+- `INDEX (tenant_id, parent_id)`
+
+---
+
+### 2.11 `document`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -393,7 +428,7 @@
 
 ---
 
-### 2.11 `event_log`
+### 2.12 `event_log`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -431,7 +466,7 @@
 
 ---
 
-### 2.12 `projects`
+### 2.13 `projects`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -462,7 +497,7 @@
 
 ---
 
-### 2.13 `time_entries`
+### 2.14 `time_entries`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -499,7 +534,7 @@
 
 ---
 
-### 2.14 `expenses`
+### 2.15 `expenses`
 
 **Columns**
 - `id UUID NOT NULL`
@@ -810,3 +845,58 @@
   - unscoped queries are prohibited in application services,
   - row-level security (RLS) can be layered on top as a defense-in-depth control.
 
+
+
+### 2.11 `ledger_account`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `code TEXT NOT NULL`
+- `name TEXT NOT NULL`
+- `account_type TEXT NOT NULL`
+- `currency CHAR(3) NOT NULL`
+- `is_active BOOLEAN NOT NULL DEFAULT TRUE`
+- `created_at TIMESTAMPTZ NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, id)`
+- `UNIQUE (tenant_id, code)`
+- `UNIQUE (tenant_id, id, currency)` (supports currency-safe composite foreign keys from ledger entries)
+
+### 2.12 `ledger_entries`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `account_id UUID NOT NULL`
+- `debit BIGINT NULL`
+- `credit BIGINT NULL`
+- `currency CHAR(3) NOT NULL`
+- `reference_type TEXT NOT NULL`
+- `reference_id UUID NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, account_id) -> ledger_account(tenant_id, id)`
+- `(tenant_id, account_id, currency) -> ledger_account(tenant_id, id, currency)`
+
+**Checks / invariants**
+- `num_nonnulls(debit, credit) = 1` so each row is exactly one-sided
+- positive amount check on whichever side is populated
+- immutable via `BEFORE UPDATE` and `BEFORE DELETE` triggers that always raise
+
+**Key indexes**
+- `INDEX (tenant_id, account_id, created_at DESC)`
+- `INDEX (tenant_id, reference_type, reference_id)`

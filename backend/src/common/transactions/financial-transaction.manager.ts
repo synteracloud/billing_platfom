@@ -7,12 +7,14 @@ export type TransactionParticipant = {
   key: string;
   snapshot: () => Snapshot;
   restore: (snapshot: Snapshot) => void;
+  validate?: () => void;
 };
 
 type TransactionContext = {
   id: number;
   depth: number;
   snapshots: Map<string, { restore: (snapshot: Snapshot) => void; value: Snapshot }>;
+  validators: Map<string, () => void>;
   rolledBack: boolean;
   release: () => void;
 };
@@ -64,6 +66,10 @@ export class FinancialTransactionManager {
           value: participant.snapshot()
         });
       }
+
+      if (participant.validate && !context.validators.has(participant.key)) {
+        context.validators.set(participant.key, participant.validate);
+      }
     }
   }
 
@@ -71,6 +77,12 @@ export class FinancialTransactionManager {
     const context = this.requireContext();
     if (context.rolledBack) {
       throw new Error('Cannot commit a rolled back transaction');
+    }
+
+    if (context.depth === 1) {
+      for (const validator of context.validators.values()) {
+        validator();
+      }
     }
 
     context.depth -= 1;
@@ -112,6 +124,7 @@ export class FinancialTransactionManager {
   private async createTopLevelContext(participants: TransactionParticipant[]): Promise<TransactionContext> {
     const release = await this.acquireLock();
     const snapshots = new Map<string, { restore: (snapshot: Snapshot) => void; value: Snapshot }>();
+    const validators = new Map<string, () => void>();
 
     try {
       for (const participant of participants) {
@@ -120,6 +133,10 @@ export class FinancialTransactionManager {
             restore: participant.restore,
             value: participant.snapshot()
           });
+        }
+
+        if (participant.validate && !validators.has(participant.key)) {
+          validators.set(participant.key, participant.validate);
         }
       }
     } catch (error) {
@@ -131,6 +148,7 @@ export class FinancialTransactionManager {
       id: this.nextContextId++,
       depth: 1,
       snapshots,
+      validators,
       rolledBack: false,
       release
     };

@@ -26,7 +26,7 @@ Consumes only canonical financial events:
 3. Build journal lines with debit/credit accounts.
 4. Validate balancing + account/currency constraints.
 5. Persist immutable `journal_entry` + `journal_line` in one transaction.
-6. Emit `accounting.journal.posted.v1`.
+6. Emit `accounting.journal.posted.v1` from the same database transaction via deferred audit trigger.
 
 ## Idempotency and Replay
 - Unique constraint: (`source_event_id`, `rule_version`).
@@ -47,8 +47,10 @@ Minimum required accounts:
 1. No unbalanced journal can be posted.
 2. No journal mutation after post.
 3. Corrections use reversal/adjustment entries only.
-4. Ledger is system-of-record for accounting balances.
-5. AR/AP must reconcile to AR/AP control accounts.
+4. Database triggers block `UPDATE`/`DELETE` on `journal_entry`, `journal_line`, and posting audit rows.
+5. Reversal entries reference the original journal entry and produce `accounting.journal.reversed.v1`.
+6. Ledger is system-of-record for accounting balances.
+7. AR/AP must reconcile to AR/AP control accounts.
 
 ## Outputs
 - `accounting.journal.posted.v1`
