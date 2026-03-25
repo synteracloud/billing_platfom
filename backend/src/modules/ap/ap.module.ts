@@ -9,6 +9,7 @@ import { ApService } from './ap.service';
 @Module({
   imports: [EventsModule, EventQueueModule],
   controllers: [ApController],
-  providers: [ApService, ApRepository, ApEventsHandler]
+  providers: [ApService, ApRepository, ApEventsHandler],
+  exports: [ApService]
 })
 export class ApModule {}
