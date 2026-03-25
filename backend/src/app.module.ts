@@ -2,6 +2,7 @@ import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/c
 import { ChartOfAccountsModule } from './modules/accounting/chart-of-accounts.module';
 import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
+import { BankConnectorModule } from './modules/bank-connector/bank-connector.module';
 import { ArModule } from './modules/ar/ar.module';
 import { ApModule } from './modules/ap/ap.module';
 import { DatabaseModule } from './database/database.module';
@@ -24,6 +25,7 @@ import { UsersModule } from './modules/users/module';
 @Module({
   imports: [
     DatabaseModule,
+    BankConnectorModule,
     ChartOfAccountsModule,
     TenantsModule,
     UsersModule,
