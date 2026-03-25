@@ -276,3 +276,80 @@ test('analytics read-only guard blocks non-GET methods', () => {
   assert.equal(guard.canActivate(buildExecutionContext('GET')), true);
   assert.throws(() => guard.canActivate(buildExecutionContext('PATCH')));
 });
+
+test('anomaly detection flags unusual expenses, abnormal cashflow changes, and outliers in read-only mode', () => {
+  const tenantId = 'tenant-analytics-anomalies';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  const dailyNet = [1100, 980, 1020, -1200, -900, 1050, -950, -880, -6200];
+
+  dailyNet.forEach((net, index) => {
+    const date = `2026-03-${String(index + 1).padStart(2, '0')}`;
+    if (net >= 0) {
+      createLedgerEntry(ledgerRepository, {
+        id: `je-in-${index + 1}`,
+        tenant_id: tenantId,
+        entry_date: date,
+        lines: [
+          { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: net },
+          { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: net }
+        ]
+      });
+      return;
+    }
+
+    createLedgerEntry(ledgerRepository, {
+      id: `je-out-${index + 1}`,
+      tenant_id: tenantId,
+      entry_date: date,
+      lines: [
+        { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: Math.abs(net) },
+        { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: Math.abs(net) }
+      ]
+    });
+  });
+
+  const anomalies = analyticsService.getAnomalies(tenantId);
+  assert.equal(anomalies.analysis_mode, 'read_only');
+  assert.equal(anomalies.automated_actions_enabled, false);
+  assert.equal(anomalies.thresholds.robust_z_score, 3.2);
+  assert.deepEqual(
+    anomalies.anomalies
+      .filter((item) => item.date === '2026-03-09')
+      .map((item) => item.type)
+      .sort(),
+    ['abnormal_cashflow_change', 'outlier', 'unusual_expense']
+  );
+});
+
+test('anomaly detection avoids false positives for stable activity and uses consistent thresholds', () => {
+  const tenantId = 'tenant-analytics-noise';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  [950, 1040, 980, 1010, 990, 1020, 1000, 970, 1030].forEach((net, index) => {
+    const date = `2026-04-${String(index + 1).padStart(2, '0')}`;
+    createLedgerEntry(ledgerRepository, {
+      id: `je-stable-${index + 1}`,
+      tenant_id: tenantId,
+      entry_date: date,
+      lines: [
+        { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: net },
+        { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: net }
+      ]
+    });
+  });
+
+  const anomalies = analyticsService.getAnomalies(tenantId);
+  assert.equal(anomalies.anomalies.length, 0);
+  assert.deepEqual(anomalies.thresholds, {
+    robust_z_score: 3.2,
+    min_samples: 6,
+    minimum_absolute_minor: 1000
+  });
+});
