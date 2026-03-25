@@ -35,6 +35,39 @@ export interface ApLedgerReconciliation {
   variance_minor: number;
 }
 
+export interface OutflowExpenseLine {
+  journal_entry_id: string;
+  entry_date: string;
+  amount_minor: number;
+}
+
+export interface OutflowBillObligationLine {
+  bill_id: string;
+  vendor_id: string;
+  due_date: string | null;
+  amount_minor: number;
+  source: 'ap' | 'simulated';
+}
+
+export interface OutflowProjection {
+  as_of_date: string;
+  obligations_total_minor: number;
+  expenses_total_minor: number;
+  projected_outflow_total_minor: number;
+  obligations: OutflowBillObligationLine[];
+  expenses: OutflowExpenseLine[];
+}
+
+export interface OutflowProjectionOptions {
+  as_of_date?: string;
+  simulated_upcoming_bills?: Array<{
+    bill_id: string;
+    vendor_id: string;
+    due_date: string | null;
+    open_amount_minor: number;
+  }>;
+}
+
 @Injectable()
 export class ApService {
   constructor(
@@ -187,6 +220,93 @@ export class ApService {
       ledger_ap_amount_minor: ledgerApAmount,
       variance_minor: totalOpenAmount - ledgerApAmount
     };
+  }
+
+  buildOutflowProjection(tenantId: string, options: OutflowProjectionOptions = {}): OutflowProjection {
+    const asOfDate = (options.as_of_date ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
+    const obligations = this.buildBillObligations(tenantId, options.simulated_upcoming_bills ?? []);
+    const expenses = this.buildLedgerExpenses(tenantId, asOfDate);
+    const obligationsTotal = obligations.reduce((sum, line) => sum + line.amount_minor, 0);
+    const expensesTotal = expenses.reduce((sum, line) => sum + line.amount_minor, 0);
+
+    return {
+      as_of_date: asOfDate,
+      obligations_total_minor: obligationsTotal,
+      expenses_total_minor: expensesTotal,
+      projected_outflow_total_minor: obligationsTotal + expensesTotal,
+      obligations,
+      expenses
+    };
+  }
+
+  private buildBillObligations(
+    tenantId: string,
+    simulatedUpcomingBills: Array<{
+      bill_id: string;
+      vendor_id: string;
+      due_date: string | null;
+      open_amount_minor: number;
+    }>
+  ): OutflowBillObligationLine[] {
+    const obligationsByBillId = new Map<string, OutflowBillObligationLine>();
+
+    for (const bill of this.apRepository.listBills(tenantId)) {
+      if (bill.status !== 'open' || bill.open_amount_minor <= 0) {
+        continue;
+      }
+
+      obligationsByBillId.set(bill.bill_id, {
+        bill_id: bill.bill_id,
+        vendor_id: bill.vendor_id,
+        due_date: bill.due_date,
+        amount_minor: bill.open_amount_minor,
+        source: 'ap'
+      });
+    }
+
+    for (const simulated of simulatedUpcomingBills) {
+      const amountMinor = Math.max(0, simulated.open_amount_minor);
+      if (amountMinor === 0) {
+        continue;
+      }
+
+      obligationsByBillId.set(simulated.bill_id, {
+        bill_id: simulated.bill_id,
+        vendor_id: simulated.vendor_id,
+        due_date: simulated.due_date,
+        amount_minor: amountMinor,
+        source: 'simulated'
+      });
+    }
+
+    return Array.from(obligationsByBillId.values()).sort((left, right) => {
+      const dueDateLeft = left.due_date ?? '9999-12-31';
+      const dueDateRight = right.due_date ?? '9999-12-31';
+      return (
+        dueDateLeft.localeCompare(dueDateRight) ||
+        left.vendor_id.localeCompare(right.vendor_id) ||
+        left.bill_id.localeCompare(right.bill_id)
+      );
+    });
+  }
+
+  private buildLedgerExpenses(tenantId: string, asOfDate: string): OutflowExpenseLine[] {
+    return this.ledgerRepository
+      .listEntries(tenantId)
+      .filter((entry) => entry.entry_date <= asOfDate)
+      .map((entry) => ({
+        journal_entry_id: entry.id,
+        entry_date: entry.entry_date,
+        amount_minor: entry.lines.reduce((sum, line) => {
+          if (!line.account_code.startsWith('5')) {
+            return sum;
+          }
+
+          return sum + (line.direction === 'debit' ? line.amount_minor : -line.amount_minor);
+        }, 0)
+      }))
+      .filter((line) => line.amount_minor > 0)
+      .sort((left, right) => left.entry_date.localeCompare(right.entry_date) || left.journal_entry_id.localeCompare(right.journal_entry_id));
   }
 
   private emitPayableUpdated(tenantId: string, position: PayableBillPosition, correlationId: string | null): void {

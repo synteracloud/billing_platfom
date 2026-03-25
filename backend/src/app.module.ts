@@ -24,6 +24,7 @@ import { TenantsModule } from './modules/tenants/module';
 import { UsersModule } from './modules/users/module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module';
+import { CashflowModule } from './modules/cashflow/cashflow.module';
 
 @Module({
   imports: [
@@ -49,7 +50,8 @@ import { ReconciliationModule } from './modules/reconciliation/reconciliation.mo
     ApModule,
     AnalyticsModule,
     WebhooksModule,
-    ReconciliationModule
+    ReconciliationModule,
+    CashflowModule
   ]
 })
 export class AppModule implements NestModule {
@@ -81,9 +83,9 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ap', method: RequestMethod.ALL },
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation/(.*)', method: RequestMethod.ALL },
-      { path: 'api/v1/analytics', method: RequestMethod.ALL },
-      { path: 'api/v1/analytics/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/cashflow/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }

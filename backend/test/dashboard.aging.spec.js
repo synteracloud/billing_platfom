@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildInvoiceAgingBuckets, trackBillDueStates } = require('../.tmp-test-dist/modules/dashboard/dashboard.service');
+const {
+  buildInvoiceAgingBuckets,
+  trackBillDueStates,
+  buildArInflowProjection,
+  validateArInflowProjectionAccuracy,
+} = require('../.tmp-test-dist/modules/dashboard/dashboard.service');
 
 test('assigns invoices into aging buckets without double counting and excludes closed states', () => {
   const asOfDate = '2026-03-25';
@@ -94,4 +99,52 @@ test('updates overdue detection when bill transitions from due to overdue', () =
     overdue: true,
     days_overdue: 1,
   });
+});
+
+test('builds AR inflow projection from unpaid invoices with probability weighting and no overestimation', () => {
+  const projection = buildArInflowProjection(
+    [
+      { id: 'inv-1', status: 'issued', due_date: '2026-03-20', amount_due_minor: 10000, payment_probability: 0.8 },
+      { id: 'inv-2', status: 'partially_paid', due_date: '2026-03-25', amount_due_minor: 6000, payment_probability: 0.5 },
+      { id: 'inv-3', status: 'draft', due_date: '2026-03-25', amount_due_minor: 7000, payment_probability: 1 },
+      { id: 'inv-4', status: 'paid', due_date: '2026-03-01', amount_due_minor: 0, payment_probability: 1 },
+      { id: 'inv-5', status: 'issued', due_date: null, amount_due_minor: 2000 },
+    ],
+    { asOfDate: '2026-03-25', defaultPaymentProbability: 0.4 }
+  );
+
+  assert.equal(projection.outstanding_ar_minor, 18000);
+  assert.equal(projection.projected_inflow_minor <= projection.outstanding_ar_minor, true, 'projection must not overestimate AR');
+  assert.equal(projection.projections.length, 3);
+  assert.deepEqual(
+    projection.projections.map((line) => ({ id: line.invoice_id, probability: line.payment_probability })),
+    [
+      { id: 'inv-1', probability: 0.7777777777777778 },
+      { id: 'inv-2', probability: 0.5 },
+      { id: 'inv-5', probability: 0.4 },
+    ]
+  );
+});
+
+test('simulates delayed payments and validates projection accuracy', () => {
+  const delayedProjection = buildArInflowProjection(
+    [
+      { id: 'inv-a', status: 'issued', due_date: '2026-03-20', amount_due_minor: 10000, payment_probability: 0.7 },
+      { id: 'inv-b', status: 'issued', due_date: '2026-03-28', amount_due_minor: 5000, payment_probability: 0.6 },
+    ],
+    { asOfDate: '2026-03-25', delayDays: 10 }
+  );
+
+  assert.deepEqual(
+    delayedProjection.projections.map((line) => line.projected_payment_date),
+    ['2026-03-30', '2026-04-07']
+  );
+
+  const accuracy = validateArInflowProjectionAccuracy(delayedProjection, {
+    'inv-a': 6000,
+    'inv-b': 3200,
+  });
+
+  assert.equal(accuracy.absolute_error_minor, 1005);
+  assert.equal(accuracy.accuracy_ratio > 0.89, true);
 });

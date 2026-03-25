@@ -3,6 +3,7 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentsService } from '../payments/payments.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { InvoiceEntity } from '../invoices/entities/invoice.entity';
+import { LedgerRepository } from '../ledger/ledger.repository';
 
 export interface AgingBuckets {
   current: number;
@@ -23,6 +24,25 @@ export interface BillDueTracking {
   overdue: BillDueState[];
 }
 
+export interface InflowProjectionLine {
+  invoice_id: string;
+  due_date: string | null;
+  projected_payment_date: string;
+  amount_due_minor: number;
+  payment_probability: number;
+  projected_amount_minor: number;
+  days_overdue: number;
+}
+
+export interface ArInflowProjection {
+  as_of_date: string;
+  delay_days: number;
+  outstanding_ar_minor: number;
+  projected_inflow_minor: number;
+  projection_accuracy_ratio: number;
+  projections: InflowProjectionLine[];
+}
+
 function toUtcDate(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
 }
@@ -31,6 +51,101 @@ function calculateDaysPastDue(dueDate: string, asOfDate: string): number {
   const dueDateUtc = toUtcDate(dueDate);
   const asOfUtc = toUtcDate(asOfDate);
   return Math.floor((asOfUtc.getTime() - dueDateUtc.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function addDaysUtc(dateString: string, days: number): string {
+  const date = toUtcDate(dateString);
+  const safeDays = Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 0;
+  date.setUTCDate(date.getUTCDate() + safeDays);
+  return date.toISOString().slice(0, 10);
+}
+
+function clampProbability(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+type ArInvoiceLike = {
+  id?: string;
+  invoice_id?: string;
+  status: InvoiceEntity['status'];
+  due_date: string | null;
+  amount_due_minor: number;
+  payment_probability?: number;
+};
+
+export function buildArInflowProjection(
+  invoices: ArInvoiceLike[],
+  options: {
+    asOfDate: string;
+    delayDays?: number;
+    defaultPaymentProbability?: number;
+  }
+): ArInflowProjection {
+  const delayDays = Number.isFinite(options.delayDays) ? Math.max(0, Math.floor(options.delayDays as number)) : 0;
+  const defaultProbability = clampProbability(options.defaultPaymentProbability ?? 1);
+
+  const eligibleInvoices = invoices.filter(
+    (invoice) =>
+      invoice.amount_due_minor > 0 && invoice.status !== 'draft' && invoice.status !== 'void' && invoice.status !== 'paid' && Boolean(invoice.id ?? invoice.invoice_id)
+  );
+
+  const projections = eligibleInvoices.map<InflowProjectionLine>((invoice) => {
+    const invoiceId = (invoice.id ?? invoice.invoice_id) as string;
+    const dueDate = invoice.due_date;
+    const daysOverdue = dueDate ? Math.max(0, calculateDaysPastDue(dueDate, options.asOfDate)) : 0;
+    const overdueDecay = Math.max(0.25, 1 - daysOverdue / 180);
+    const baseProbability = clampProbability(invoice.payment_probability ?? defaultProbability);
+    const effectiveProbability = clampProbability(baseProbability * overdueDecay);
+    const projectedAmount = Math.min(invoice.amount_due_minor, Math.floor(invoice.amount_due_minor * effectiveProbability));
+    const baseProjectionDate = dueDate ?? options.asOfDate;
+
+    return {
+      invoice_id: invoiceId,
+      due_date: dueDate,
+      projected_payment_date: addDaysUtc(baseProjectionDate, delayDays),
+      amount_due_minor: invoice.amount_due_minor,
+      payment_probability: effectiveProbability,
+      projected_amount_minor: projectedAmount,
+      days_overdue: daysOverdue,
+    };
+  });
+
+  const outstandingAr = projections.reduce((sum, line) => sum + line.amount_due_minor, 0);
+  const projectedInflow = projections.reduce((sum, line) => sum + line.projected_amount_minor, 0);
+
+  return {
+    as_of_date: options.asOfDate,
+    delay_days: delayDays,
+    outstanding_ar_minor: outstandingAr,
+    projected_inflow_minor: projectedInflow,
+    projection_accuracy_ratio: outstandingAr === 0 ? 1 : projectedInflow / outstandingAr,
+    projections,
+  };
+}
+
+export function validateArInflowProjectionAccuracy(
+  projection: ArInflowProjection,
+  actualCollectedMinorByInvoiceId: Record<string, number>
+): { absolute_error_minor: number; accuracy_ratio: number } {
+  const { absoluteError, projectedTotal } = projection.projections.reduce(
+    (acc, line) => {
+      const actual = Math.max(0, actualCollectedMinorByInvoiceId[line.invoice_id] ?? 0);
+      return {
+        projectedTotal: acc.projectedTotal + line.projected_amount_minor,
+        absoluteError: acc.absoluteError + Math.abs(line.projected_amount_minor - actual),
+      };
+    },
+    { projectedTotal: 0, absoluteError: 0 }
+  );
+
+  return {
+    absolute_error_minor: absoluteError,
+    accuracy_ratio: projectedTotal === 0 ? (absoluteError === 0 ? 1 : 0) : Math.max(0, 1 - absoluteError / projectedTotal),
+  };
 }
 
 type BillLikeState = {
@@ -121,12 +236,66 @@ export function buildInvoiceAgingBuckets(invoices: Array<Pick<InvoiceEntity, 'st
   );
 }
 
+
+export interface RunwayAnalyticsInput {
+  current_cash_minor: number;
+  inflows_minor: number;
+  outflows_minor: number;
+}
+
+export interface RunwayAnalyticsResult extends RunwayAnalyticsInput {
+  net_burn_minor: number;
+  runway_days: number | null;
+}
+
+export function computeCurrentCashMinor(ledgerEntries: Array<{ lines: Array<{ account_code: string; direction: 'debit' | 'credit'; amount_minor: number }> }>): number {
+  return ledgerEntries.reduce((entrySum, entry) => {
+    return entrySum + entry.lines.reduce((lineSum, line) => {
+      if (line.account_code !== '1000') {
+        return lineSum;
+      }
+
+      return lineSum + (line.direction === 'debit' ? line.amount_minor : -line.amount_minor);
+    }, 0);
+  }, 0);
+}
+
+export function computeNetBurnMinor(inflowsMinor: number, outflowsMinor: number): number {
+  return outflowsMinor - inflowsMinor;
+}
+
+export function computeRunwayAnalytics(input: RunwayAnalyticsInput): RunwayAnalyticsResult {
+  const currentCashMinor = Math.max(0, input.current_cash_minor);
+  const inflowsMinor = Math.max(0, input.inflows_minor);
+  const outflowsMinor = Math.max(0, input.outflows_minor);
+  const netBurnMinor = computeNetBurnMinor(inflowsMinor, outflowsMinor);
+
+  if (currentCashMinor === 0 || netBurnMinor <= 0) {
+    return {
+      current_cash_minor: currentCashMinor,
+      inflows_minor: inflowsMinor,
+      outflows_minor: outflowsMinor,
+      net_burn_minor: netBurnMinor,
+      runway_days: null,
+    };
+  }
+
+  return {
+    current_cash_minor: currentCashMinor,
+    inflows_minor: inflowsMinor,
+    outflows_minor: outflowsMinor,
+    net_burn_minor: netBurnMinor,
+    runway_days: Number((currentCashMinor / netBurnMinor).toFixed(2)),
+  };
+}
+
 @Injectable()
 export class DashboardService {
   constructor(
     private readonly invoicesService: InvoicesService,
     private readonly paymentsService: PaymentsService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly ledgerRepository: LedgerRepository,
   ) {}
 
   getMetrics(tenantId: string): {
@@ -135,6 +304,11 @@ export class DashboardService {
         revenue_today: number;
         outstanding_balance: number;
         invoices_due: number;
+        runway_days: number | null;
+        net_burn_minor: number;
+        current_cash_minor: number;
+        inflows_minor: number;
+        outflows_minor: number;
       };
       aging: AgingBuckets;
       active_subscriptions: number;
@@ -158,12 +332,26 @@ export class DashboardService {
     const activeSubscriptions = subscriptions.filter((subscription) => subscription.status === 'active').length;
     const aging = buildInvoiceAgingBuckets(invoices, today);
 
+    const currentCashMinor = computeCurrentCashMinor(this.ledgerRepository.listEntries(tenantId));
+    const inflowsMinor = payments.reduce((sum, payment) => sum + Math.max(0, payment.amount_received_minor), 0);
+    const outflowsMinor = this.computeOutflowsMinor(tenantId);
+    const runway = computeRunwayAnalytics({
+      current_cash_minor: currentCashMinor,
+      inflows_minor: inflowsMinor,
+      outflows_minor: outflowsMinor,
+    });
+
     return {
       dashboard: {
         metrics: {
           revenue_today: revenueToday,
           outstanding_balance: outstandingBalance,
           invoices_due: invoicesDue,
+          runway_days: runway.runway_days,
+          net_burn_minor: runway.net_burn_minor,
+          current_cash_minor: runway.current_cash_minor,
+          inflows_minor: runway.inflows_minor,
+          outflows_minor: runway.outflows_minor,
         },
         aging,
         active_subscriptions: activeSubscriptions,
@@ -185,4 +373,23 @@ export class DashboardService {
       },
     };
   }
+
+  private computeOutflowsMinor(tenantId: string): number {
+    const billPaymentOutflows = this.ledgerRepository.listEntries(tenantId).reduce((sum, entry) => {
+      if (entry.source_type !== 'bill') {
+        return sum;
+      }
+
+      return sum + entry.lines.reduce((lineSum, line) => {
+        if (line.account_code !== '1000' || line.direction !== 'credit') {
+          return lineSum;
+        }
+
+        return lineSum + line.amount_minor;
+      }, 0);
+    }, 0);
+
+    return Math.max(0, billPaymentOutflows);
+  }
+
 }
