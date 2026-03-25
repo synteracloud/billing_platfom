@@ -15,6 +15,6 @@ import { PaymentReceivedLedgerConsumer } from './payment-received-ledger.consume
     LedgerInvoiceCreatedConsumer,
     PaymentReceivedLedgerConsumer
   ],
-  exports: [LedgerService]
+  exports: [LedgerService, LedgerRepository]
 })
 export class LedgerModule {}

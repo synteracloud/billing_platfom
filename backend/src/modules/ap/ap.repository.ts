@@ -27,6 +27,7 @@ export interface VendorPayableState {
 @Injectable()
 export class ApRepository {
   private readonly positions = new Map<string, Map<string, PayableBillPosition>>();
+  private readonly appliedEventKeys = new Set<string>();
 
   upsertBill(tenantId: string, position: PayableBillPosition): PayableBillPosition {
     const tenantPositions = this.positions.get(tenantId) ?? new Map<string, PayableBillPosition>();
@@ -51,5 +52,29 @@ export class ApRepository {
     }
 
     return Array.from(tenantPositions.values()).filter((position) => position.vendor_id === vendorId);
+  }
+
+  listBills(tenantId: string): PayableBillPosition[] {
+    const tenantPositions = this.positions.get(tenantId);
+    if (!tenantPositions) {
+      return [];
+    }
+
+    return Array.from(tenantPositions.values());
+  }
+
+  markEventApplied(tenantId: string, scope: string, eventId: string): boolean {
+    const normalizedEventId = eventId.trim();
+    if (!normalizedEventId) {
+      return true;
+    }
+
+    const key = `${tenantId}::${scope}::${normalizedEventId}`;
+    if (this.appliedEventKeys.has(key)) {
+      return false;
+    }
+
+    this.appliedEventKeys.add(key);
+    return true;
   }
 }
