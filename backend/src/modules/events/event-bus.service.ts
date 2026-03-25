@@ -136,12 +136,7 @@ export class EventBusService {
 
         try {
           await this.eventConsumerIdempotencyService.execute(
-            {
-              tenant_id: currentEvent.tenant_id,
-              id: currentEvent.id,
-              type: currentEvent.type,
-              idempotency_key: currentEvent.idempotency_key
-            },
+            currentEvent,
             subscription.id,
             async () => {
               await subscription.handler(currentEvent as DomainEvent<TEventType>);

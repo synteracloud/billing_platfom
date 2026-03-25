@@ -4,7 +4,7 @@ import { FinancialTransactionManager, TransactionParticipant } from '../../commo
 import { CustomersService } from '../customers/customers.service';
 import { EventsService } from '../events/events.service';
 import { InvoicesRepository } from '../invoices/invoices.repository';
-import { InvoiceEntity } from '../invoices/entities/invoice.entity';
+import { canTransitionInvoiceStatus, InvoiceEntity, InvoiceStatus } from '../invoices/entities/invoice.entity';
 import { AllocatePaymentDto } from './dto/allocate-payment.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { PaymentAllocationEntity } from './entities/payment-allocation.entity';
@@ -282,7 +282,7 @@ export class PaymentsService {
 
   private syncInvoicePaymentStatus(tenantId: string, invoiceId: string, correlationId: string): void {
     const invoice = this.invoicesRepository.findById(tenantId, invoiceId);
-    if (!invoice || invoice.status === 'void') {
+    if (!invoice || invoice.status === 'void' || invoice.status === 'draft') {
       return;
     }
 
@@ -290,13 +290,28 @@ export class PaymentsService {
     const paidMinor = Math.min(allocated, invoice.total_minor);
     const dueMinor = Math.max(0, invoice.total_minor - paidMinor);
 
-    let nextStatus: InvoiceEntity['status'];
-    if (paidMinor <= 0) {
-      nextStatus = 'issued';
-    } else if (dueMinor === 0) {
-      nextStatus = 'paid';
-    } else {
-      nextStatus = 'partially_paid';
+    const nextStatus: InvoiceStatus = dueMinor === 0 ? 'paid' : 'issued';
+
+    if (!canTransitionInvoiceStatus(invoice.status, nextStatus)) {
+      throw new ConflictException(`Invalid invoice status transition: ${invoice.status} -> ${nextStatus}`);
+    }
+
+    if (nextStatus === 'paid' && invoice.status !== 'paid') {
+      this.eventsService.logEvent({
+        tenant_id: tenantId,
+        type: 'billing.invoice.paid.v1',
+        aggregate_type: 'invoice',
+        aggregate_id: invoiceId,
+        aggregate_version: 3,
+        correlation_id: correlationId,
+        payload: {
+          invoice_id: invoiceId,
+          paid_at: new Date().toISOString(),
+          amount_paid_minor: paidMinor,
+          currency_code: invoice.currency,
+          payment_id: correlationId
+        }
+      });
     }
 
     const updated = this.invoicesRepository.update(tenantId, invoiceId, {

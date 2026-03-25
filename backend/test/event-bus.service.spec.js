@@ -15,18 +15,18 @@ function createEventsService() {
   const eventBusService = new EventBusService(eventsRepository, eventConsumerIdempotencyService);
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService);
 
-  return { eventsService, eventsRepository };
+  return { eventsService, eventsRepository, eventBusService };
 }
 
 test('publishes invoice events to multiple sync and async consumers without coupling', async () => {
-  const { eventsService } = createEventsService();
+  const { eventsService, eventBusService } = createEventsService();
   const deliveries = [];
 
-  const first = eventsService.subscribe('billing.invoice.issued.v1', (event) => {
+  const first = eventBusService.subscribe('billing.invoice.issued.v1', (event) => {
     deliveries.push(['sync', event.aggregate_id, event.payload.invoice_id]);
   });
 
-  const second = eventsService.subscribe('billing.invoice.issued.v1', async (event) => {
+  const second = eventBusService.subscribe('billing.invoice.issued.v1', async (event) => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     deliveries.push(['async', event.aggregate_id, event.payload.currency_code]);
   });
@@ -55,7 +55,7 @@ test('publishes invoice events to multiple sync and async consumers without coup
 });
 
 test('replays stored canonical domain events to new subscribers and retries safely after transient failures', async () => {
-  const { eventsService } = createEventsService();
+  const { eventsService, eventBusService } = createEventsService();
   const delivered = [];
   let attempts = 0;
 
@@ -73,7 +73,7 @@ test('replays stored canonical domain events to new subscribers and retries safe
     }
   });
 
-  const subscription = eventsService.subscribe('billing.payment.settled.v1', async (event) => {
+  const subscription = eventBusService.subscribe('billing.payment.settled.v1', async (event) => {
     attempts += 1;
     if (attempts === 1) {
       throw new Error('temporary failure');
@@ -89,16 +89,16 @@ test('replays stored canonical domain events to new subscribers and retries safe
 });
 
 test('handles high event volume for multiple consumers with no event loss', async () => {
-  const { eventsService } = createEventsService();
+  const { eventsService, eventBusService } = createEventsService();
   const totalEvents = 200;
   let syncCount = 0;
   let asyncCount = 0;
 
-  const syncSubscription = eventsService.subscribe('billing.invoice.created.v1', () => {
+  const syncSubscription = eventBusService.subscribe('billing.invoice.created.v1', () => {
     syncCount += 1;
   });
 
-  const asyncSubscription = eventsService.subscribe('billing.invoice.created.v1', async () => {
+  const asyncSubscription = eventBusService.subscribe('billing.invoice.created.v1', async () => {
     await Promise.resolve();
     asyncCount += 1;
   });
@@ -121,8 +121,49 @@ test('handles high event volume for multiple consumers with no event loss', asyn
     });
   }
 
-  await Promise.all([syncSubscription.waitForIdle(), asyncSubscription.waitForIdle(), eventsService.waitForIdle()]);
+  await Promise.all([syncSubscription.waitForIdle(), asyncSubscription.waitForIdle(), eventBusService.waitForIdle()]);
 
   assert.equal(syncCount, totalEvents);
   assert.equal(asyncCount, totalEvents);
+});
+
+test('records complete audit events and deduplicates duplicate audit mutations', async () => {
+  const { eventsService } = createEventsService();
+
+  const first = eventsService.logMutation({
+    tenant_id: 'tenant-1',
+    entity_type: 'invoice',
+    entity_id: 'invoice-99',
+    action: 'issued',
+    aggregate_version: 2,
+    actor_type: 'user',
+    actor_id: 'user-42',
+    payload: {
+      invoice_id: 'invoice-99',
+      status: 'issued'
+    }
+  });
+
+  const duplicate = eventsService.logMutation({
+    tenant_id: 'tenant-1',
+    entity_type: 'invoice',
+    entity_id: 'invoice-99',
+    action: 'issued',
+    aggregate_version: 2,
+    actor_type: 'user',
+    actor_id: 'user-42',
+    payload: {
+      invoice_id: 'invoice-99',
+      status: 'issued'
+    }
+  });
+
+  assert.equal(first.id, duplicate.id);
+  assert.equal(first.event_category, 'audit');
+  assert.equal(first.actor_type, 'user');
+  assert.equal(first.payload.action, 'issued');
+  assert.equal(first.payload.entity.type, 'invoice');
+  assert.equal(first.payload.entity.id, 'invoice-99');
+  assert.ok(first.payload.timestamp);
+  assert.equal(first.payload.actor.id, 'user-42');
 });
