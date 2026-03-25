@@ -84,6 +84,23 @@ test('supports partial and split payment matching deterministically', () => {
   assert(firstRun.exceptions.every((item) => item.reason !== 'ambiguous'));
 });
 
+
+test('prevents false positives when reference matches but transaction date is out of window', () => {
+  const engine = new MatchingEngine({ maxDateDistanceDays: 5 });
+  const result = engine.run({
+    invoices: [
+      { id: 'inv-old', tenant_id: 't1', currency_code: 'USD', invoice_date: '2026-01-01', amount_minor: 10000, reference_id: 'INV-OLD' }
+    ],
+    payments: [
+      { id: 'pay-late', tenant_id: 't1', currency_code: 'USD', payment_date: '2026-02-20', amount_minor: 10000, reference_id: 'INV-OLD' }
+    ],
+    bank_transactions: []
+  });
+
+  assert.equal(result.invoice_payment_matches.length, 0);
+  assert(result.exceptions.some((item) => item.entity_id === 'inv-old' && item.reason === 'unmatched'));
+});
+
 test('avoids false positives and flags ambiguous candidates', () => {
   const engine = new MatchingEngine();
   const result = engine.run({
