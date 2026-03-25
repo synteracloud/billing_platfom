@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
 import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
-import { DomainEvent, InvoiceCreatedPayload, InvoiceIssuedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
+import { BillCreatedPayload, DomainEvent, InvoiceIssuedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
@@ -14,6 +14,7 @@ const SUPPORTED_EVENT_NAMES = new Set([
   'billing.invoice.issued.v1',
   'billing.payment.settled.v1',
   'billing.payment.refunded.v1',
+  'billing.bill.created.v1',
   'billing.bill.approved.v1',
   'billing.bill.paid.v1'
 ]);
@@ -44,6 +45,10 @@ const EVENT_DIRECTIONAL_ACCOUNT_RULES = new Map<string, Array<{ direction: Journ
     { direction: 'credit', codes: ['1000'] }
   ]],
   ['billing.bill.approved.v1', [
+    { direction: 'debit', codes: ['5000'] },
+    { direction: 'credit', codes: ['2000'] }
+  ]],
+  ['billing.bill.created.v1', [
     { direction: 'debit', codes: ['5000'] },
     { direction: 'credit', codes: ['2000'] }
   ]],
@@ -353,19 +358,20 @@ export class LedgerService {
       }
       case 'billing.payment.settled.v1': {
         const payload = event.payload as PaymentSettledPayload;
+        const allocationContext = this.resolvePaymentAllocationContext(payload);
         return {
           tenant_id: event.tenant_id,
           source_type: 'payment',
-          source_id: payload.payment_id,
+          source_id: allocationContext.source_id,
           source_event_id: event.id,
           event_name: eventType,
           rule_version: ruleVersion,
           entry_date: payload.settled_at.slice(0, 10),
           currency_code: payload.currency_code,
-          description: `Payment settled ${payload.payment_id}`,
+          description: allocationContext.description,
           entries: [
-            this.createPostingLine('1000', 'Cash', 'debit', payload.amount_minor, payload.currency_code),
-            this.createPostingLine('1100', 'Accounts Receivable', 'credit', payload.amount_minor, payload.currency_code)
+            this.createPostingLine('1000', 'Cash', 'debit', allocationContext.allocated_minor, payload.currency_code),
+            this.createPostingLine('1100', 'Accounts Receivable', 'credit', allocationContext.allocated_minor, payload.currency_code)
           ]
         };
       }
@@ -390,6 +396,24 @@ export class LedgerService {
       case 'billing.bill.approved.v1':
       case 'billing.bill.paid.v1':
         throw new BadRequestException(`Automatic posting for ${eventType} is not yet implemented`);
+      case 'billing.bill.created.v1': {
+        const payload = event.payload as BillCreatedPayload;
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'bill',
+          source_id: payload.bill_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: payload.created_at.slice(0, 10),
+          currency_code: payload.currency_code,
+          description: `Bill created ${payload.bill_id} (${payload.expense_classification})`,
+          entries: [
+            this.createPostingLine('5000', 'Expense', 'debit', payload.total_minor, payload.currency_code),
+            this.createPostingLine('2000', 'Accounts Payable', 'credit', payload.total_minor, payload.currency_code)
+          ]
+        };
+      }
       default:
         throw new BadRequestException(`Unsupported event_name: ${eventType}`);
     }
@@ -402,6 +426,50 @@ export class LedgerService {
       direction,
       amount_minor: amountMinor,
       currency_code: currencyCode
+    };
+  }
+
+  private resolvePaymentAllocationContext(payload: PaymentSettledPayload): { allocated_minor: number; source_id: string; description: string } {
+    const totalSettledMinor = payload.amount_minor;
+    const allocatedFromField = Number.isInteger(payload.allocated_minor) ? payload.allocated_minor : null;
+    const allocatedFromTotal = Number.isInteger(payload.total_allocated_minor) ? payload.total_allocated_minor : null;
+    const allocationChanges = Array.isArray(payload.allocation_changes) ? payload.allocation_changes : [];
+    const allocatedFromChanges = allocationChanges
+      .map((item) => item.allocated_delta_minor)
+      .filter((value) => Number.isInteger(value) && value > 0)
+      .reduce((sum, value) => sum + value, 0);
+    const allocatedMinor = allocatedFromField
+      ?? allocatedFromTotal
+      ?? (allocatedFromChanges > 0 ? allocatedFromChanges : totalSettledMinor);
+
+    if (!Number.isInteger(allocatedMinor) || allocatedMinor <= 0) {
+      throw new BadRequestException('Payment settled payload must include a positive allocated amount');
+    }
+
+    if (allocatedMinor > totalSettledMinor) {
+      throw new BadRequestException('Allocated amount cannot exceed settled amount');
+    }
+
+    const allocationIds = new Set<string>();
+    if (payload.allocation_id?.trim()) {
+      allocationIds.add(payload.allocation_id.trim());
+    }
+    for (const allocationId of payload.allocation_ids ?? []) {
+      if (typeof allocationId === 'string' && allocationId.trim()) {
+        allocationIds.add(allocationId.trim());
+      }
+    }
+
+    const allocationReference = Array.from(allocationIds.values()).sort();
+    const allocationSuffix = allocationReference.length > 0 ? ` allocations ${allocationReference.join(',')}` : '';
+    const sourceId = allocationReference.length > 0
+      ? `${payload.payment_id}:${allocationReference.join('+')}`
+      : payload.payment_id;
+
+    return {
+      allocated_minor: allocatedMinor,
+      source_id: sourceId,
+      description: `Payment settled ${payload.payment_id}${allocationSuffix}`.trim()
     };
   }
 

@@ -11,6 +11,7 @@ export const CANONICAL_EVENT_TYPES = [
   'billing.payment.settled.v1',
   'billing.payment.allocated.v1',
   'billing.payment.refunded.v1',
+  'billing.bill.created.v1',
   'accounting.journal.posted.v1',
   'accounting.journal.reversed.v1',
   'subledger.receivable.updated.v1',
@@ -32,6 +33,7 @@ export type DomainAggregateType =
   | 'invoice_line'
   | 'payment'
   | 'payment_allocation'
+  | 'bill'
   | 'journal_entry'
   | 'receivable_position'
   | 'payable_position'
@@ -104,6 +106,11 @@ export type PaymentSettledPayload = {
   settled_at: string;
   amount_minor: number;
   currency_code: string;
+  allocated_minor?: number;
+  allocation_id?: string;
+  allocation_ids?: string[];
+  allocation_changes?: PaymentAllocationChange[];
+  total_allocated_minor?: number;
 };
 
 export type PaymentAllocatedPayload = {
@@ -122,6 +129,14 @@ export type PaymentRefundedPayload = {
   amount_minor: number;
   currency_code: string;
   allocation_changes: PaymentAllocationChange[];
+};
+
+export type BillCreatedPayload = {
+  bill_id: string;
+  created_at: string;
+  total_minor: number;
+  currency_code: string;
+  expense_classification: 'operating' | 'cost_of_goods_sold' | 'asset';
 };
 
 export type PaymentAllocationChange = {
@@ -218,6 +233,7 @@ export type DomainEventPayloadMap = {
   'billing.payment.settled.v1': PaymentSettledPayload;
   'billing.payment.allocated.v1': PaymentAllocatedPayload;
   'billing.payment.refunded.v1': PaymentRefundedPayload;
+  'billing.bill.created.v1': BillCreatedPayload;
   'accounting.journal.posted.v1': JournalPostedPayload;
   'accounting.journal.reversed.v1': JournalReversedPayload;
   'subledger.receivable.updated.v1': ReceivableUpdatedPayload;

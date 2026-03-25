@@ -162,6 +162,21 @@ export const POSTING_RULE_EXPECTATIONS: PostingRuleExpectation[] = [
     ]
   },
   {
+    eventType: 'billing.bill.created.v1',
+    requiredAccounts: [
+      {
+        key: 'operating_expense',
+        allowedTypes: ['expense', 'asset'],
+        rationale: 'Created bills debit an expense or asset account.'
+      },
+      {
+        key: 'accounts_payable',
+        allowedTypes: ['liability'],
+        rationale: 'Created bills credit accounts payable.'
+      }
+    ]
+  },
+  {
     eventType: 'billing.bill.approved.v1',
     requiredAccounts: [
       {

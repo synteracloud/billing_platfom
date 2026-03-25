@@ -180,6 +180,51 @@ test('posts invoice and payment events idempotently and rejects conflicting retr
   await assert.rejects(() => ledgerService.postEvent('tenant-1', paymentEvent.id, 'retry-1', '2025-01-01'), /already bound/);
 });
 
+test('posts payment settlement against allocated amount and remains idempotent on retries', async () => {
+  const { ledgerService, eventsRepository, ledgerRepository } = createLedgerService();
+
+  const paymentEvent = eventsRepository.create({
+    id: 'evt-payment-partial-1',
+    type: 'billing.payment.settled.v1',
+    version: 1,
+    tenant_id: 'tenant-1',
+    payload: {
+      payment_id: 'payment-partial-1',
+      settled_at: '2025-01-19T00:00:00.000Z',
+      amount_minor: 2500,
+      allocated_minor: 1400,
+      allocation_id: 'alloc-1',
+      currency_code: 'USD'
+    },
+    occurred_at: '2025-01-19T00:00:00.000Z',
+    recorded_at: '2025-01-19T00:00:00.000Z',
+    aggregate_type: 'payment',
+    aggregate_id: 'payment-partial-1',
+    aggregate_version: 1,
+    causation_id: null,
+    correlation_id: null,
+    idempotency_key: 'payment-partial-1',
+    producer: 'test'
+  });
+
+  const first = await ledgerService.postEvent('tenant-1', paymentEvent.id, 'partial-retry-1', '2025-01-01');
+  const second = await ledgerService.postEvent('tenant-1', paymentEvent.id, 'partial-retry-2', '2025-01-01');
+
+  assert.equal(first.id, second.id, 'retries should resolve to the same journal entry');
+  assert.equal(first.source_id, 'payment-partial-1:alloc-1');
+
+  const debitCash = first.lines.find((line) => line.account_code === '1000' && line.direction === 'debit');
+  const creditAr = first.lines.find((line) => line.account_code === '1100' && line.direction === 'credit');
+  assert.equal(debitCash?.amount_minor, 1400, 'cash should be debited for the allocated amount');
+  assert.equal(creditAr?.amount_minor, 1400, 'AR should be reduced by the allocated amount');
+
+  const debitTotal = first.lines.filter((line) => line.direction === 'debit').reduce((sum, line) => sum + line.amount_minor, 0);
+  const creditTotal = first.lines.filter((line) => line.direction === 'credit').reduce((sum, line) => sum + line.amount_minor, 0);
+  assert.equal(debitTotal, creditTotal, 'journal should remain balanced');
+
+  assert.equal(ledgerRepository.findBySourceEvent('tenant-1', paymentEvent.id, '2025-01-01')?.id, first.id);
+});
+
 test('blocks postings with unknown accounts or missing required event accounts', async () => {
   const { ledgerService, ledgerRepository, eventsRepository } = createLedgerService();
 
@@ -215,4 +260,44 @@ test('blocks postings with unknown accounts or missing required event accounts',
 
   assert.equal(ledgerRepository.findBySourceEvent('tenant-1', 'event-invoice-3', '2025-01-01'), undefined);
   assert.equal(eventsRepository.listByTenant('tenant-1', {}).length, 0);
+});
+
+test('posts bill.created to expense and accounts payable idempotently', async () => {
+  const { ledgerService, eventsRepository } = createLedgerService();
+
+  const billCreatedEvent = eventsRepository.create({
+    id: 'evt-bill-1',
+    type: 'billing.bill.created.v1',
+    version: 1,
+    tenant_id: 'tenant-1',
+    payload: {
+      bill_id: 'bill-evt-1',
+      created_at: '2025-01-21T00:00:00.000Z',
+      total_minor: 3100,
+      currency_code: 'USD',
+      expense_classification: 'operating'
+    },
+    occurred_at: '2025-01-21T00:00:00.000Z',
+    recorded_at: '2025-01-21T00:00:00.000Z',
+    aggregate_type: 'bill',
+    aggregate_id: 'bill-evt-1',
+    aggregate_version: 1,
+    causation_id: null,
+    correlation_id: null,
+    idempotency_key: 'bill-evt-1',
+    producer: 'test'
+  });
+
+  const first = await ledgerService.postEvent('tenant-1', billCreatedEvent.id, 'bill-retry-1', '2025-01-01');
+  const duplicate = await ledgerService.postEvent('tenant-1', billCreatedEvent.id, 'bill-retry-2', '2025-01-01');
+
+  assert.equal(first.id, duplicate.id);
+  assert.equal(first.lines.length, 2);
+  assert.deepEqual(
+    first.lines.map((line) => [line.account_code, line.direction, line.amount_minor]),
+    [
+      ['5000', 'debit', 3100],
+      ['2000', 'credit', 3100]
+    ]
+  );
 });
