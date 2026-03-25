@@ -276,3 +276,69 @@ test('analytics read-only guard blocks non-GET methods', () => {
   assert.equal(guard.canActivate(buildExecutionContext('GET')), true);
   assert.throws(() => guard.canActivate(buildExecutionContext('PATCH')));
 });
+
+test('classification is assistive, consistent, and deterministic across transaction types', () => {
+  const tenantId = 'tenant-classification';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-before',
+    customer_id: 'cust-1',
+    currency_code: 'USD',
+    issue_date: '2026-03-01',
+    due_date: '2026-03-10',
+    total_minor: 1000,
+    open_amount_minor: 1000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-03-01T00:00:00.000Z'
+  });
+
+  const revenue = analyticsService.classifyTransaction({
+    amount_minor: 150000,
+    transaction_description: 'Customer payment received for March subscription invoice',
+    metadata: { source: 'bank_feed', counterparty_type: 'customer' },
+    ocr: { text: 'Invoice total paid in full' }
+  });
+  assert.equal(revenue.category, 'revenue');
+  assert.equal(revenue.deterministic_fallback_used, false);
+  assert.ok(revenue.confidence_score > 0.5);
+
+  const expense = analyticsService.classifyTransaction({
+    amount_minor: -7800,
+    transaction_description: 'Vendor bill payment for office utility fee',
+    metadata: { source: 'ap_portal', counterparty_type: 'vendor' },
+    ocr: { text: 'Utility expense statement' }
+  });
+  assert.equal(expense.category, 'expense');
+  assert.equal(expense.deterministic_fallback_used, false);
+  assert.ok(expense.confidence_score > 0.5);
+
+  const transfer = analyticsService.classifyTransaction({
+    amount_minor: 12000,
+    transaction_description: 'Internal transfer from reserve account',
+    metadata: { account_pair: '1000->1010' }
+  });
+  assert.equal(transfer.category, 'transfer');
+  assert.ok(transfer.confidence_score >= 0.5);
+
+  const fallbackA = analyticsService.classifyTransaction({
+    amount_minor: -999,
+    transaction_description: 'memo ref 12345'
+  });
+  const fallbackB = analyticsService.classifyTransaction({
+    amount_minor: -999,
+    transaction_description: 'memo ref 12345'
+  });
+  assert.deepEqual(fallbackA, fallbackB);
+  assert.equal(fallbackA.category, 'expense');
+  assert.equal(fallbackA.deterministic_fallback_used, true);
+  assert.equal(fallbackA.confidence_score, 0.25);
+
+  const invoicesAfter = arRepository.listInvoices(tenantId);
+  assert.equal(invoicesAfter.length, 1);
+  assert.equal(invoicesAfter[0].invoice_id, 'inv-before');
+});

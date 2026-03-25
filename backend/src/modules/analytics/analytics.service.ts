@@ -5,6 +5,32 @@ import { LedgerRepository } from '../ledger/ledger.repository';
 
 const CASH_ACCOUNT_CODES = new Set(['1000', '1010']);
 
+export type TransactionClassificationCategory =
+  | 'expense'
+  | 'revenue'
+  | 'asset'
+  | 'liability'
+  | 'transfer'
+  | 'equity'
+  | 'other';
+
+export interface ClassificationInput {
+  amount_minor?: number | null;
+  transaction_description?: string | null;
+  metadata?: Record<string, unknown> | null;
+  ocr?: {
+    text?: string | null;
+    fields?: Record<string, string | number | boolean | null> | null;
+  } | null;
+}
+
+export interface ClassificationResult {
+  category: TransactionClassificationCategory;
+  confidence_score: number;
+  rationale: string[];
+  deterministic_fallback_used: boolean;
+}
+
 export interface CashflowPoint {
   date: string;
   inflow_minor: number;
@@ -40,6 +66,52 @@ export interface RunwayReport {
   projected_runway_days: number | null;
   based_on_horizon_days: number;
 }
+
+type ClassificationRule = {
+  category: TransactionClassificationCategory;
+  weight: number;
+  label: string;
+  keywords: string[];
+};
+
+const CLASSIFICATION_RULES: ClassificationRule[] = [
+  {
+    category: 'revenue',
+    weight: 0.46,
+    label: 'Revenue terms',
+    keywords: ['invoice', 'payment received', 'sale', 'subscription', 'deposit from customer', 'customer payment', 'income', 'payout']
+  },
+  {
+    category: 'expense',
+    weight: 0.46,
+    label: 'Expense terms',
+    keywords: ['bill', 'vendor', 'payroll', 'expense', 'rent', 'utility', 'supplier', 'purchase', 'withdrawal', 'fee', 'tax payment']
+  },
+  {
+    category: 'transfer',
+    weight: 0.54,
+    label: 'Transfer terms',
+    keywords: ['transfer', 'internal transfer', 'sweep', 'cash move', 'wallet transfer', 'bank transfer']
+  },
+  {
+    category: 'asset',
+    weight: 0.4,
+    label: 'Asset terms',
+    keywords: ['equipment', 'capitalized', 'prepaid', 'fixed asset', 'inventory purchase']
+  },
+  {
+    category: 'liability',
+    weight: 0.42,
+    label: 'Liability terms',
+    keywords: ['loan', 'debt', 'credit card payable', 'accrued', 'interest payable']
+  },
+  {
+    category: 'equity',
+    weight: 0.5,
+    label: 'Equity terms',
+    keywords: ['owner contribution', 'share issuance', 'dividend', 'capital contribution']
+  }
+];
 
 @Injectable()
 export class AnalyticsService {
@@ -145,6 +217,71 @@ export class AnalyticsService {
     };
   }
 
+  classifyTransaction(input: ClassificationInput): ClassificationResult {
+    const normalizedDescription = (input.transaction_description ?? '').trim().toLowerCase();
+    const normalizedMetadata = this.flattenText(input.metadata);
+    const normalizedOcrText = (input.ocr?.text ?? '').trim().toLowerCase();
+    const normalizedOcrFields = this.flattenText(input.ocr?.fields);
+    const haystack = [normalizedDescription, normalizedMetadata, normalizedOcrText, normalizedOcrFields].filter(Boolean).join(' ');
+    const amountMinor = typeof input.amount_minor === 'number' ? input.amount_minor : null;
+
+    const scores = new Map<TransactionClassificationCategory, number>();
+    const rationale: string[] = [];
+
+    for (const rule of CLASSIFICATION_RULES) {
+      let hits = 0;
+      for (const keyword of rule.keywords) {
+        if (this.hasKeywordMatch(haystack, keyword)) {
+          hits += 1;
+        }
+      }
+
+      if (hits > 0) {
+        const scoreContribution = Math.min(1, hits / 2) * rule.weight;
+        scores.set(rule.category, (scores.get(rule.category) ?? 0) + scoreContribution);
+        rationale.push(`${rule.label}: ${hits} match(es)`);
+      }
+    }
+
+    if (this.hasKeywordMatch(haystack, 'refund') || this.hasKeywordMatch(haystack, 'chargeback')) {
+      scores.set('expense', (scores.get('expense') ?? 0) + 0.2);
+      rationale.push('Refund/chargeback marker');
+    }
+
+    if (this.hasKeywordMatch(haystack, 'capital call') || this.hasKeywordMatch(haystack, 'owner draw')) {
+      scores.set('equity', (scores.get('equity') ?? 0) + 0.2);
+      rationale.push('Equity marker');
+    }
+
+    const scored = Array.from(scores.entries()).sort(([leftCategory, leftScore], [rightCategory, rightScore]) => {
+      if (rightScore !== leftScore) {
+        return rightScore - leftScore;
+      }
+      return leftCategory.localeCompare(rightCategory);
+    });
+
+    if (scored.length === 0) {
+      return {
+        category: this.getFallbackCategory(amountMinor),
+        confidence_score: 0.25,
+        rationale: ['Deterministic fallback'],
+        deterministic_fallback_used: true
+      };
+    }
+
+    const [topCategory, topScore] = scored[0];
+    const secondScore = scored[1]?.[1] ?? 0;
+    const separation = Math.max(0, topScore - secondScore);
+    const normalizedConfidence = Math.min(0.99, Math.max(0.3, topScore * 0.7 + separation * 0.4));
+
+    return {
+      category: topCategory,
+      confidence_score: Number(normalizedConfidence.toFixed(4)),
+      rationale,
+      deterministic_fallback_used: false
+    };
+  }
+
   private buildProjection(items: Array<{ date: string; amount_minor: number; currency_code: string }>): ProjectionReport {
     const byDay = new Map<string, number>();
     let currencyCode = 'USD';
@@ -163,5 +300,30 @@ export class AnalyticsService {
       total_minor: points.reduce((sum, item) => sum + item.amount_minor, 0),
       by_day: points
     };
+  }
+
+  private flattenText(value: unknown): string {
+    if (!value || typeof value !== 'object') {
+      return '';
+    }
+
+    return Object.values(value as Record<string, unknown>)
+      .map((item) => (item == null ? '' : String(item).trim().toLowerCase()))
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  private getFallbackCategory(amountMinor: number | null): TransactionClassificationCategory {
+    if (amountMinor == null || amountMinor === 0) {
+      return 'other';
+    }
+
+    return amountMinor > 0 ? 'revenue' : 'expense';
+  }
+
+  private hasKeywordMatch(haystack: string, keyword: string): boolean {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`(^|\\W)${escaped}(\\W|$)`);
+    return pattern.test(haystack);
   }
 }
