@@ -5,6 +5,32 @@ import { LedgerRepository } from '../ledger/ledger.repository';
 
 const CASH_ACCOUNT_CODES = new Set(['1000', '1010']);
 
+export type TransactionClassificationCategory =
+  | 'expense'
+  | 'revenue'
+  | 'asset'
+  | 'liability'
+  | 'transfer'
+  | 'equity'
+  | 'other';
+
+export interface ClassificationInput {
+  amount_minor?: number | null;
+  transaction_description?: string | null;
+  metadata?: Record<string, unknown> | null;
+  ocr?: {
+    text?: string | null;
+    fields?: Record<string, string | number | boolean | null> | null;
+  } | null;
+}
+
+export interface ClassificationResult {
+  category: TransactionClassificationCategory;
+  confidence_score: number;
+  rationale: string[];
+  deterministic_fallback_used: boolean;
+}
+
 export interface CashflowPoint {
   date: string;
   inflow_minor: number;
@@ -41,26 +67,26 @@ export interface RunwayReport {
   based_on_horizon_days: number;
 }
 
-export interface FinancialAssistantEvidence {
-  metric: string;
-  value: number | string;
-  source: 'analytics' | 'ar' | 'ap' | 'ledger';
+export interface AnomalyItem {
+  type: 'unusual_expense' | 'abnormal_cashflow_change' | 'outlier';
+  date: string;
+  amount_minor: number;
+  metric: 'outflow_minor' | 'net_minor' | 'abs_net_minor';
+  threshold_minor: number;
+  score: number;
+  note: string;
 }
 
-export interface FinancialAssistantQc {
-  grounded_in_data: true;
-  deterministic_ordering: true;
-  cross_check_passed: boolean;
-  edge_query_covered: boolean;
-}
-
-export interface FinancialAssistantResponse {
-  query: string;
-  intent: 'cash_position' | 'late_payers' | 'financial_summary' | 'unsupported';
-  answer: string;
-  reasoning: string[];
-  evidence: FinancialAssistantEvidence[];
-  qc: FinancialAssistantQc;
+export interface AnomalyReport {
+  currency_code: string;
+  analysis_mode: 'read_only';
+  automated_actions_enabled: false;
+  thresholds: {
+    robust_z_score: number;
+    min_samples: number;
+    minimum_absolute_minor: number;
+  };
+  anomalies: AnomalyItem[];
 }
 
 @Injectable()
@@ -167,142 +193,84 @@ export class AnalyticsService {
     };
   }
 
-  answerFinancialQuery(tenantId: string, query: string, asOfDate: string = this.todayIsoDate()): FinancialAssistantResponse {
-    const normalizedQuery = this.normalizeQuery(query);
-    if (normalizedQuery === 'cash position') {
-      return this.answerCashPosition(tenantId, query);
-    }
+  getAnomalies(tenantId: string): AnomalyReport {
+    const cashflow = this.getCashflow(tenantId);
+    const byDay = cashflow.by_day;
+    const anomalies: AnomalyItem[] = [];
 
-    if (normalizedQuery === 'who will pay late') {
-      return this.answerWhoWillPayLate(tenantId, query, asOfDate);
-    }
+    const robustZScore = 3.2;
+    const minSamples = 6;
+    const minimumAbsoluteMinor = 1000;
 
-    if (normalizedQuery === 'summarize financial state') {
-      return this.answerFinancialSummary(tenantId, query, asOfDate);
-    }
+    const outflows = byDay.map((point) => point.outflow_minor);
+    const netSeries = byDay.map((point) => point.net_minor);
+    const absNetSeries = byDay.map((point) => Math.abs(point.net_minor));
 
-    return {
-      query,
-      intent: 'unsupported',
-      answer: 'Unsupported financial copilot query. Supported queries: "cash position?", "who will pay late?", "summarize financial state".',
-      reasoning: ['Intent not recognized from a fixed supported query list.'],
-      evidence: [],
-      qc: {
-        grounded_in_data: true,
-        deterministic_ordering: true,
-        cross_check_passed: true,
-        edge_query_covered: true
+    const outflowStats = this.computeRobustStats(outflows);
+    const absNetStats = this.computeRobustStats(absNetSeries);
+    const netChanges = byDay.slice(1).map((point, index) => point.net_minor - byDay[index].net_minor);
+    const netChangeStats = this.computeRobustStats(netChanges);
+
+    byDay.forEach((point, index) => {
+      if (byDay.length >= minSamples) {
+        const outflowScore = this.computeRobustScore(point.outflow_minor, outflowStats.median, outflowStats.mad);
+        if (point.outflow_minor >= minimumAbsoluteMinor && outflowScore >= robustZScore) {
+          anomalies.push({
+            type: 'unusual_expense',
+            date: point.date,
+            amount_minor: point.outflow_minor,
+            metric: 'outflow_minor',
+            threshold_minor: this.computeThreshold(outflowStats.median, outflowStats.mad, robustZScore),
+            score: Number(outflowScore.toFixed(2)),
+            note: 'Expense outflow is materially above normal baseline.'
+          });
+        }
+
+        const previousPoint = index > 0 ? byDay[index - 1] : null;
+        const netChangeMinor = previousPoint ? point.net_minor - previousPoint.net_minor : 0;
+        const netChangeScore = this.computeRobustScore(netChangeMinor, netChangeStats.median, netChangeStats.mad);
+        if (
+          previousPoint &&
+          Math.abs(netChangeMinor) >= minimumAbsoluteMinor &&
+          (Math.abs(netChangeScore) >= robustZScore ||
+            Math.abs(netChangeMinor) >= minimumAbsoluteMinor * 2.5)
+        ) {
+          anomalies.push({
+            type: 'abnormal_cashflow_change',
+            date: point.date,
+            amount_minor: netChangeMinor,
+            metric: 'net_minor',
+            threshold_minor: this.computeThreshold(netChangeStats.median, netChangeStats.mad, robustZScore),
+            score: Number(netChangeScore.toFixed(2)),
+            note: 'Net cashflow shift deviates significantly from expected pattern.'
+          });
+        }
+
+        const absNetScore = this.computeRobustScore(Math.abs(point.net_minor), absNetStats.median, absNetStats.mad);
+        if (Math.abs(point.net_minor) >= minimumAbsoluteMinor && absNetScore >= robustZScore + 0.4) {
+          anomalies.push({
+            type: 'outlier',
+            date: point.date,
+            amount_minor: point.net_minor,
+            metric: 'abs_net_minor',
+            threshold_minor: this.computeThreshold(absNetStats.median, absNetStats.mad, robustZScore + 0.4),
+            score: Number(absNetScore.toFixed(2)),
+            note: 'Cash movement magnitude is an outlier versus recent activity.'
+          });
+        }
       }
-    };
-  }
-
-  private answerCashPosition(tenantId: string, query: string): FinancialAssistantResponse {
-    const cashflow = this.getCashflow(tenantId);
-    const openArMinor = this.arRepository
-      .listInvoices(tenantId)
-      .filter((invoice) => invoice.status === 'open')
-      .reduce((sum, invoice) => sum + invoice.open_amount_minor, 0);
-    const openApMinor = this.apRepository
-      .listBills(tenantId)
-      .filter((bill) => bill.status === 'open')
-      .reduce((sum, bill) => sum + bill.open_amount_minor, 0);
-
-    const answer = `Cash position is ${cashflow.totals.net_minor} ${cashflow.currency_code} minor units (inflow ${cashflow.totals.inflow_minor}, outflow ${cashflow.totals.outflow_minor}).`;
-    const evidence: FinancialAssistantEvidence[] = [
-      { metric: 'cash_on_hand_minor', value: cashflow.totals.net_minor, source: 'analytics' },
-      { metric: 'cash_inflow_minor', value: cashflow.totals.inflow_minor, source: 'ledger' },
-      { metric: 'cash_outflow_minor', value: cashflow.totals.outflow_minor, source: 'ledger' },
-      { metric: 'open_ar_minor', value: openArMinor, source: 'ar' },
-      { metric: 'open_ap_minor', value: openApMinor, source: 'ap' }
-    ];
+    });
 
     return {
-      query,
-      intent: 'cash_position',
-      answer,
-      reasoning: [
-        'Computed from ledger cash account movements only.',
-        'Cross-checked against current open AR and AP balances for context.'
-      ],
-      evidence,
-      qc: this.buildQc(true)
-    };
-  }
-
-  private answerWhoWillPayLate(tenantId: string, query: string, asOfDate: string): FinancialAssistantResponse {
-    const overdue = this.arRepository
-      .listInvoices(tenantId)
-      .filter((invoice) => invoice.status === 'open' && invoice.open_amount_minor > 0 && invoice.due_date !== null && invoice.due_date < asOfDate)
-      .map((invoice) => ({
-        customer_id: invoice.customer_id,
-        invoice_id: invoice.invoice_id,
-        due_date: invoice.due_date!,
-        days_overdue: this.daysBetween(invoice.due_date!, asOfDate),
-        open_amount_minor: invoice.open_amount_minor
-      }))
-      .sort(
-        (left, right) =>
-          right.days_overdue - left.days_overdue ||
-          right.open_amount_minor - left.open_amount_minor ||
-          left.customer_id.localeCompare(right.customer_id) ||
-          left.invoice_id.localeCompare(right.invoice_id)
-      );
-
-    const evidence: FinancialAssistantEvidence[] = overdue.map((line) => ({
-      metric: `overdue_invoice:${line.invoice_id}`,
-      value: `${line.customer_id}|${line.due_date}|${line.days_overdue}|${line.open_amount_minor}`,
-      source: 'ar'
-    }));
-    const answer =
-      overdue.length === 0
-        ? `No open overdue invoices as of ${asOfDate}; no likely late payers identified from AR data.`
-        : `Likely late payers as of ${asOfDate}: ${overdue
-            .map((line) => `${line.customer_id} (invoice ${line.invoice_id}, ${line.days_overdue} days overdue, ${line.open_amount_minor} minor units)`)
-            .join('; ')}.`;
-
-    return {
-      query,
-      intent: 'late_payers',
-      answer,
-      reasoning: [
-        'Selected only open AR invoices with a due date before as-of date.',
-        'Ranked deterministically by days overdue, then open amount, then identifiers.'
-      ],
-      evidence,
-      qc: this.buildQc(true)
-    };
-  }
-
-  private answerFinancialSummary(tenantId: string, query: string, asOfDate: string): FinancialAssistantResponse {
-    const cashflow = this.getCashflow(tenantId);
-    const inflow = this.getInflowProjection(tenantId);
-    const outflow = this.getOutflowProjection(tenantId);
-    const overdueInvoices = this.arRepository
-      .listInvoices(tenantId)
-      .filter((invoice) => invoice.status === 'open' && invoice.open_amount_minor > 0 && invoice.due_date !== null && invoice.due_date < asOfDate);
-    const overdueBills = this.apRepository
-      .listBills(tenantId)
-      .filter((bill) => bill.status === 'open' && bill.open_amount_minor > 0 && bill.due_date !== null && bill.due_date < asOfDate);
-
-    const answer = `Financial state: cash ${cashflow.totals.net_minor} ${cashflow.currency_code} minor units; projected AR inflow ${inflow.total_minor}; projected AP outflow ${outflow.total_minor}; overdue invoices ${overdueInvoices.length}; overdue bills ${overdueBills.length}.`;
-    const evidence: FinancialAssistantEvidence[] = [
-      { metric: 'cash_on_hand_minor', value: cashflow.totals.net_minor, source: 'analytics' },
-      { metric: 'projected_ar_inflow_minor', value: inflow.total_minor, source: 'ar' },
-      { metric: 'projected_ap_outflow_minor', value: outflow.total_minor, source: 'ap' },
-      { metric: 'overdue_invoice_count', value: overdueInvoices.length, source: 'ar' },
-      { metric: 'overdue_bill_count', value: overdueBills.length, source: 'ap' }
-    ];
-
-    return {
-      query,
-      intent: 'financial_summary',
-      answer,
-      reasoning: [
-        'Summary combines analytics layer projections with AR/AP overdue state.',
-        'All values are directly derived from repository-backed system data.'
-      ],
-      evidence,
-      qc: this.buildQc(inflow.total_minor >= 0 && outflow.total_minor >= 0)
+      currency_code: cashflow.currency_code,
+      analysis_mode: 'read_only',
+      automated_actions_enabled: false,
+      thresholds: {
+        robust_z_score: robustZScore,
+        min_samples: minSamples,
+        minimum_absolute_minor: minimumAbsoluteMinor
+      },
+      anomalies
     };
   }
 
@@ -326,26 +294,36 @@ export class AnalyticsService {
     };
   }
 
-  private normalizeQuery(query: string): string {
-    return query.trim().toLowerCase().replace(/\?+$/g, '');
+  private computeRobustStats(values: number[]): { median: number; mad: number } {
+    const median = this.computeMedian(values);
+    const deviations = values.map((value) => Math.abs(value - median));
+    const mad = this.computeMedian(deviations);
+    return { median, mad };
   }
 
-  private daysBetween(startDate: string, endDate: string): number {
-    const start = new Date(`${startDate}T00:00:00.000Z`).getTime();
-    const end = new Date(`${endDate}T00:00:00.000Z`).getTime();
-    return Math.max(0, Math.floor((end - start) / 86_400_000));
+  private computeMedian(values: number[]): number {
+    if (values.length === 0) {
+      return 0;
+    }
+
+    const sorted = [...values].sort((left, right) => left - right);
+    const middle = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+      return (sorted[middle - 1] + sorted[middle]) / 2;
+    }
+
+    return sorted[middle];
   }
 
-  private todayIsoDate(): string {
-    return new Date().toISOString().slice(0, 10);
+  private computeRobustScore(value: number, median: number, mad: number): number {
+    if (mad === 0) {
+      return value === median ? 0 : Number.POSITIVE_INFINITY;
+    }
+
+    return (0.6745 * (value - median)) / mad;
   }
 
-  private buildQc(crossCheckPassed: boolean): FinancialAssistantQc {
-    return {
-      grounded_in_data: true,
-      deterministic_ordering: true,
-      cross_check_passed: crossCheckPassed,
-      edge_query_covered: true
-    };
+  private computeThreshold(median: number, mad: number, zScore: number): number {
+    return Math.round(median + (zScore * mad) / 0.6745);
   }
 }

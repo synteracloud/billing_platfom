@@ -29,12 +29,8 @@ export class AnalyticsController {
     return this.analyticsService.getRunway(request.tenant.id, parsed);
   }
 
-  @Get('copilot')
-  getFinancialCopilotAnswer(
-    @Req() request: AuthenticatedRequest,
-    @Query('query') query = '',
-    @Query('as_of_date') asOfDate?: string
-  ) {
-    return this.analyticsService.answerFinancialQuery(request.tenant.id, query, asOfDate);
+  @Get('anomalies')
+  getAnomalies(@Req() request: AuthenticatedRequest) {
+    return this.analyticsService.getAnomalies(request.tenant.id);
   }
 }

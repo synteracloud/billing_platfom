@@ -277,127 +277,79 @@ test('analytics read-only guard blocks non-GET methods', () => {
   assert.throws(() => guard.canActivate(buildExecutionContext('PATCH')));
 });
 
-test('financial copilot returns grounded cash position and summary answers', () => {
-  const tenantId = 'tenant-financial-copilot';
+test('anomaly detection flags unusual expenses, abnormal cashflow changes, and outliers in read-only mode', () => {
+  const tenantId = 'tenant-analytics-anomalies';
   const ledgerRepository = new LedgerRepository();
   const arRepository = new ArRepository();
   const apRepository = new ApRepository();
   const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
 
-  arRepository.upsertInvoice(tenantId, {
-    invoice_id: 'inv-open-1',
-    customer_id: 'cust-1',
-    currency_code: 'USD',
-    issue_date: '2026-03-01',
-    due_date: '2026-03-20',
-    total_minor: 3000,
-    open_amount_minor: 3000,
-    paid_amount_minor: 0,
-    status: 'open',
-    updated_at: '2026-03-01T00:00:00.000Z'
-  });
-  apRepository.upsertBill(tenantId, {
-    bill_id: 'bill-open-1',
-    vendor_id: 'vendor-1',
-    currency_code: 'USD',
-    approved_at: '2026-03-02',
-    due_date: '2026-03-22',
-    total_minor: 2200,
-    open_amount_minor: 2200,
-    paid_amount_minor: 0,
-    status: 'open',
-    updated_at: '2026-03-02T00:00:00.000Z'
+  const dailyNet = [1100, 980, 1020, -1200, -900, 1050, -950, -880, -6200];
+
+  dailyNet.forEach((net, index) => {
+    const date = `2026-03-${String(index + 1).padStart(2, '0')}`;
+    if (net >= 0) {
+      createLedgerEntry(ledgerRepository, {
+        id: `je-in-${index + 1}`,
+        tenant_id: tenantId,
+        entry_date: date,
+        lines: [
+          { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: net },
+          { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: net }
+        ]
+      });
+      return;
+    }
+
+    createLedgerEntry(ledgerRepository, {
+      id: `je-out-${index + 1}`,
+      tenant_id: tenantId,
+      entry_date: date,
+      lines: [
+        { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: Math.abs(net) },
+        { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: Math.abs(net) }
+      ]
+    });
   });
 
-  createLedgerEntry(ledgerRepository, {
-    id: 'je-copilot-1',
-    tenant_id: tenantId,
-    entry_date: '2026-03-05',
-    lines: [
-      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 5000 },
-      { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: 5000 }
-    ]
-  });
-  createLedgerEntry(ledgerRepository, {
-    id: 'je-copilot-2',
-    tenant_id: tenantId,
-    entry_date: '2026-03-07',
-    lines: [
-      { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: 1200 },
-      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 1200 }
-    ]
-  });
-
-  const cashAnswer = analyticsService.answerFinancialQuery(tenantId, 'cash position?');
-  assert.equal(cashAnswer.intent, 'cash_position');
-  assert.equal(cashAnswer.qc.grounded_in_data, true);
-  assert.equal(cashAnswer.qc.cross_check_passed, true);
-  assert.match(cashAnswer.answer, /3800/);
+  const anomalies = analyticsService.getAnomalies(tenantId);
+  assert.equal(anomalies.analysis_mode, 'read_only');
+  assert.equal(anomalies.automated_actions_enabled, false);
+  assert.equal(anomalies.thresholds.robust_z_score, 3.2);
   assert.deepEqual(
-    cashAnswer.evidence.map((line) => line.metric),
-    ['cash_on_hand_minor', 'cash_inflow_minor', 'cash_outflow_minor', 'open_ar_minor', 'open_ap_minor']
+    anomalies.anomalies
+      .filter((item) => item.date === '2026-03-09')
+      .map((item) => item.type)
+      .sort(),
+    ['abnormal_cashflow_change', 'outlier', 'unusual_expense']
   );
-
-  const summaryAnswer = analyticsService.answerFinancialQuery(tenantId, 'summarize financial state', '2026-03-25');
-  assert.equal(summaryAnswer.intent, 'financial_summary');
-  assert.equal(summaryAnswer.qc.grounded_in_data, true);
-  assert.equal(summaryAnswer.qc.edge_query_covered, true);
-  assert.match(summaryAnswer.answer, /overdue invoices 1/);
-  assert.match(summaryAnswer.answer, /overdue bills 1/);
 });
 
-test('financial copilot late-payer response is deterministic and handles edge queries', () => {
-  const tenantId = 'tenant-financial-copilot-late';
+test('anomaly detection avoids false positives for stable activity and uses consistent thresholds', () => {
+  const tenantId = 'tenant-analytics-noise';
   const ledgerRepository = new LedgerRepository();
   const arRepository = new ArRepository();
   const apRepository = new ApRepository();
   const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
 
-  arRepository.upsertInvoice(tenantId, {
-    invoice_id: 'inv-1',
-    customer_id: 'cust-z',
-    currency_code: 'USD',
-    issue_date: '2026-03-01',
-    due_date: '2026-03-10',
-    total_minor: 2500,
-    open_amount_minor: 2500,
-    paid_amount_minor: 0,
-    status: 'open',
-    updated_at: '2026-03-01T00:00:00.000Z'
-  });
-  arRepository.upsertInvoice(tenantId, {
-    invoice_id: 'inv-2',
-    customer_id: 'cust-a',
-    currency_code: 'USD',
-    issue_date: '2026-03-02',
-    due_date: '2026-03-10',
-    total_minor: 4000,
-    open_amount_minor: 4000,
-    paid_amount_minor: 0,
-    status: 'open',
-    updated_at: '2026-03-02T00:00:00.000Z'
-  });
-  arRepository.upsertInvoice(tenantId, {
-    invoice_id: 'inv-open-future',
-    customer_id: 'cust-future',
-    currency_code: 'USD',
-    issue_date: '2026-03-15',
-    due_date: '2026-04-15',
-    total_minor: 1000,
-    open_amount_minor: 1000,
-    paid_amount_minor: 0,
-    status: 'open',
-    updated_at: '2026-03-15T00:00:00.000Z'
+  [950, 1040, 980, 1010, 990, 1020, 1000, 970, 1030].forEach((net, index) => {
+    const date = `2026-04-${String(index + 1).padStart(2, '0')}`;
+    createLedgerEntry(ledgerRepository, {
+      id: `je-stable-${index + 1}`,
+      tenant_id: tenantId,
+      entry_date: date,
+      lines: [
+        { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: net },
+        { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: net }
+      ]
+    });
   });
 
-  const lateAnswer = analyticsService.answerFinancialQuery(tenantId, 'who will pay late?', '2026-03-25');
-  assert.equal(lateAnswer.intent, 'late_payers');
-  assert.equal(lateAnswer.qc.deterministic_ordering, true);
-  assert.equal(lateAnswer.evidence.length, 2);
-  assert.equal(lateAnswer.evidence[0].metric, 'overdue_invoice:inv-2');
-  assert.equal(lateAnswer.evidence[1].metric, 'overdue_invoice:inv-1');
-
-  const unsupported = analyticsService.answerFinancialQuery(tenantId, 'show me magic');
-  assert.equal(unsupported.intent, 'unsupported');
-  assert.equal(unsupported.evidence.length, 0);
+  const anomalies = analyticsService.getAnomalies(tenantId);
+  assert.equal(anomalies.anomalies.length, 0);
+  assert.deepEqual(anomalies.thresholds, {
+    robust_z_score: 3.2,
+    min_samples: 6,
+    minimum_absolute_minor: 1000
+  });
 });
