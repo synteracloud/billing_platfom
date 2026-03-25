@@ -120,6 +120,15 @@ test('analytics APIs match calculations from raw AR/AP and ledger data', () => {
       { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 1800 }
     ]
   });
+  createLedgerEntry(ledgerRepository, {
+    id: 'je-3',
+    tenant_id: tenantId,
+    entry_date: '2026-02-06',
+    lines: [
+      { account_code: '1010', account_name: 'Operating Cash', direction: 'debit', amount_minor: 500 },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 500 }
+    ]
+  });
 
   const rawCashIn = 4000;
   const rawCashOut = 1800;
@@ -129,6 +138,10 @@ test('analytics APIs match calculations from raw AR/AP and ledger data', () => {
   assert.equal(cashflow.totals.inflow_minor, rawCashIn);
   assert.equal(cashflow.totals.outflow_minor, rawCashOut);
   assert.equal(cashflow.totals.net_minor, rawCashNet);
+  assert.deepEqual(cashflow.by_day, [
+    { date: '2026-02-01', inflow_minor: 4000, outflow_minor: 0, net_minor: 4000 },
+    { date: '2026-02-05', inflow_minor: 0, outflow_minor: 1800, net_minor: -1800 }
+  ]);
 
   const inflow = analyticsService.getInflowProjection(tenantId);
   assert.equal(inflow.total_minor, 6000);
@@ -148,6 +161,78 @@ test('analytics APIs match calculations from raw AR/AP and ledger data', () => {
   assert.equal(runway.cash_on_hand_minor, rawCashNet);
   assert.equal(runway.projected_daily_net_burn_minor, 0);
   assert.equal(runway.projected_runway_days, null);
+});
+
+test('projections include overdue invoices and future bills with deterministic ordering', () => {
+  const tenantId = 'tenant-analytics-overdue';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-overdue',
+    customer_id: 'cust-1',
+    currency_code: 'USD',
+    issue_date: '2026-01-10',
+    due_date: '2026-01-20',
+    total_minor: 7000,
+    open_amount_minor: 4500,
+    paid_amount_minor: 2500,
+    status: 'open',
+    updated_at: '2026-02-20T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-future',
+    customer_id: 'cust-2',
+    currency_code: 'USD',
+    issue_date: '2026-03-10',
+    due_date: '2026-04-10',
+    total_minor: 3200,
+    open_amount_minor: 3200,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-03-10T00:00:00.000Z'
+  });
+
+  apRepository.upsertBill(tenantId, {
+    bill_id: 'bill-overdue',
+    vendor_id: 'vendor-1',
+    currency_code: 'USD',
+    approved_at: '2026-01-15',
+    due_date: '2026-02-01',
+    total_minor: 2100,
+    open_amount_minor: 900,
+    paid_amount_minor: 1200,
+    status: 'open',
+    updated_at: '2026-02-01T00:00:00.000Z'
+  });
+  apRepository.upsertBill(tenantId, {
+    bill_id: 'bill-future',
+    vendor_id: 'vendor-2',
+    currency_code: 'USD',
+    approved_at: '2026-03-12',
+    due_date: '2026-04-15',
+    total_minor: 5000,
+    open_amount_minor: 5000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-03-12T00:00:00.000Z'
+  });
+
+  const inflow = analyticsService.getInflowProjection(tenantId);
+  assert.equal(inflow.total_minor, 7700);
+  assert.deepEqual(inflow.by_day, [
+    { date: '2026-01-20', amount_minor: 4500 },
+    { date: '2026-04-10', amount_minor: 3200 }
+  ]);
+
+  const outflow = analyticsService.getOutflowProjection(tenantId);
+  assert.equal(outflow.total_minor, 5900);
+  assert.deepEqual(outflow.by_day, [
+    { date: '2026-02-01', amount_minor: 900 },
+    { date: '2026-04-15', amount_minor: 5000 }
+  ]);
 });
 
 test('runway handles burn and edge cases with zero/negative horizon', () => {

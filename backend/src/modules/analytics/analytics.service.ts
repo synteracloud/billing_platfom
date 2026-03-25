@@ -55,20 +55,26 @@ export class AnalyticsService {
 
     for (const entry of this.ledgerRepository.listEntries(tenantId)) {
       currencyCode = entry.currency_code || currencyCode;
-      for (const line of entry.lines) {
+      const netCashMovement = entry.lines.reduce((sum, line) => {
         if (!CASH_ACCOUNT_CODES.has(line.account_code)) {
-          continue;
+          return sum;
         }
 
-        const day = entry.entry_date;
-        const current = dayTotals.get(day) ?? { inflow_minor: 0, outflow_minor: 0 };
-        if (line.direction === 'debit') {
-          current.inflow_minor += line.amount_minor;
-        } else {
-          current.outflow_minor += line.amount_minor;
-        }
-        dayTotals.set(day, current);
+        return sum + (line.direction === 'debit' ? line.amount_minor : -line.amount_minor);
+      }, 0);
+
+      if (netCashMovement === 0) {
+        continue;
       }
+
+      const day = entry.entry_date;
+      const current = dayTotals.get(day) ?? { inflow_minor: 0, outflow_minor: 0 };
+      if (netCashMovement > 0) {
+        current.inflow_minor += netCashMovement;
+      } else {
+        current.outflow_minor += Math.abs(netCashMovement);
+      }
+      dayTotals.set(day, current);
     }
 
     const byDay = Array.from(dayTotals.entries())
