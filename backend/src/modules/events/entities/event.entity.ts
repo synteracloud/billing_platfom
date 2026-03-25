@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto';
 
 export const CANONICAL_EVENT_TYPES = [
   'billing.invoice.created.v1',
+  'billing.invoice.sent.v1',
+  'billing.invoice.paid.v1',
   'billing.invoice.issued.v1',
   'billing.invoice.voided.v1',
   'billing.payment.recorded.v1',
@@ -53,6 +55,25 @@ export type InvoiceIssuedPayload = {
   due_date: string | null;
   total_minor: number;
   currency_code: string;
+};
+
+export type InvoiceSentPayload = {
+  invoice_id: string;
+  customer_id: string;
+  to_email: string;
+  sent_at: string;
+  total_minor: number;
+  currency_code: string;
+};
+
+export type InvoicePaidPayload = {
+  invoice_id: string;
+  customer_id: string;
+  payment_status: 'paid';
+  amount_paid_minor: number;
+  amount_due_minor: number;
+  currency_code: string;
+  paid_at: string;
 };
 
 export type InvoiceVoidedPayload = {
@@ -170,6 +191,8 @@ export type AuditPayload = {
 
 export type DomainEventPayloadMap = {
   'billing.invoice.created.v1': InvoiceCreatedPayload;
+  'billing.invoice.sent.v1': InvoiceSentPayload;
+  'billing.invoice.paid.v1': InvoicePaidPayload;
   'billing.invoice.issued.v1': InvoiceIssuedPayload;
   'billing.invoice.voided.v1': InvoiceVoidedPayload;
   'billing.payment.recorded.v1': PaymentRecordedPayload;
