@@ -32,3 +32,42 @@ export interface InboundBankTransaction {
   metadata?: Record<string, unknown> | null;
   [key: string]: unknown;
 }
+
+export interface AutoMatchCandidate {
+  id: string;
+  amount_minor: number;
+  posted_date: string;
+  reference?: string | null;
+}
+
+export type AutoMatchRule = 'exact_amount_match' | 'date_within_threshold' | 'reference_match';
+
+export interface AutoMatchRulesConfig {
+  exact_amount_match: boolean;
+  date_within_threshold: {
+    enabled: boolean;
+    threshold_days: number;
+  };
+  reference_match: {
+    enabled: boolean;
+    require_when_transaction_has_reference: boolean;
+  };
+  minimum_rules_to_match: number;
+  priority: AutoMatchRule[];
+}
+
+export interface AutoMatchEvaluation {
+  candidate_id: string;
+  exact_amount_match: boolean;
+  date_within_threshold: boolean;
+  reference_match: boolean;
+  matched_rules: AutoMatchRule[];
+}
+
+export interface AutoMatchResult {
+  matched_candidate_id: string | null;
+  status: 'matched' | 'unmatched' | 'ambiguous';
+  rule_used: AutoMatchRule | null;
+  evaluations: AutoMatchEvaluation[];
+  config: AutoMatchRulesConfig;
+}
