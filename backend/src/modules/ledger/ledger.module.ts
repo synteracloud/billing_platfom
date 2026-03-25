@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { TransactionsModule } from '../../common/transactions/transactions.module';
 import { EventsModule } from '../events/events.module';
 import { EventQueueModule } from '../events/queue/event-queue.module';
-import { BillCreatedLedgerConsumer } from './bill-created-ledger.consumer';
 import { LedgerInvoiceCreatedConsumer } from './ledger-invoice-created.consumer';
 import { LedgerRepository } from './ledger.repository';
 import { LedgerService } from './ledger.service';
@@ -14,8 +13,7 @@ import { PaymentReceivedLedgerConsumer } from './payment-received-ledger.consume
     LedgerRepository,
     LedgerService,
     LedgerInvoiceCreatedConsumer,
-    PaymentReceivedLedgerConsumer,
-    BillCreatedLedgerConsumer
+    PaymentReceivedLedgerConsumer
   ],
   exports: [LedgerService]
 })

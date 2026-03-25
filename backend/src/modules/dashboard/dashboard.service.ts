@@ -11,6 +11,18 @@ export interface AgingBuckets {
   days_90_plus: number;
 }
 
+export interface BillDueState {
+  bill_id: string;
+  due_date: string;
+  overdue: boolean;
+  days_overdue: number;
+}
+
+export interface BillDueTracking {
+  due: BillDueState[];
+  overdue: BillDueState[];
+}
+
 function toUtcDate(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
 }
@@ -19,6 +31,56 @@ function calculateDaysPastDue(dueDate: string, asOfDate: string): number {
   const dueDateUtc = toUtcDate(dueDate);
   const asOfUtc = toUtcDate(asOfDate);
   return Math.floor((asOfUtc.getTime() - dueDateUtc.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+type BillLikeState = {
+  id?: string;
+  bill_id?: string;
+  status: InvoiceEntity['status'];
+  due_date: string | null;
+  amount_due_minor: number;
+};
+
+export function trackBillDueStates(bills: BillLikeState[], asOfDate: string): BillDueTracking {
+  const trackedById = bills.reduce<Map<string, BillLikeState>>((tracked, bill) => {
+    const billId = bill.bill_id ?? bill.id;
+    if (!billId) {
+      return tracked;
+    }
+
+    if (tracked.has(billId)) {
+      return tracked;
+    }
+
+    if (bill.amount_due_minor <= 0) {
+      return tracked;
+    }
+
+    if (bill.status === 'draft' || bill.status === 'void' || bill.status === 'paid') {
+      return tracked;
+    }
+
+    if (!bill.due_date) {
+      return tracked;
+    }
+
+    return new Map(tracked).set(billId, bill);
+  }, new Map<string, BillLikeState>());
+
+  const due = Array.from(trackedById.entries()).map(([billId, bill]) => {
+    const daysPastDue = calculateDaysPastDue(bill.due_date as string, asOfDate);
+    return {
+      bill_id: billId,
+      due_date: bill.due_date as string,
+      overdue: daysPastDue > 0,
+      days_overdue: Math.max(0, daysPastDue),
+    };
+  });
+
+  return {
+    due,
+    overdue: due.filter((bill) => bill.overdue),
+  };
 }
 
 export function buildInvoiceAgingBuckets(invoices: Array<Pick<InvoiceEntity, 'status' | 'due_date' | 'amount_due_minor'>>, asOfDate: string): AgingBuckets {
