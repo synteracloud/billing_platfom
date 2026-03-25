@@ -271,6 +271,164 @@ test('runway handles burn and edge cases with zero/negative horizon', () => {
   assert.equal(runway.projected_runway_days, 26);
 });
 
+test('collections prediction is assistive-only and ranks late-pattern customers higher', () => {
+  const tenantId = 'tenant-collections';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'cust-late-h1',
+    customer_id: 'cust-late',
+    currency_code: 'USD',
+    issue_date: '2026-01-01',
+    due_date: '2026-01-10',
+    total_minor: 1000,
+    open_amount_minor: 0,
+    paid_amount_minor: 1000,
+    status: 'closed',
+    updated_at: '2026-01-25T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'cust-late-h2',
+    customer_id: 'cust-late',
+    currency_code: 'USD',
+    issue_date: '2026-02-01',
+    due_date: '2026-02-10',
+    total_minor: 1200,
+    open_amount_minor: 0,
+    paid_amount_minor: 1200,
+    status: 'closed',
+    updated_at: '2026-02-22T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'cust-early-h1',
+    customer_id: 'cust-early',
+    currency_code: 'USD',
+    issue_date: '2026-01-01',
+    due_date: '2026-01-20',
+    total_minor: 900,
+    open_amount_minor: 0,
+    paid_amount_minor: 900,
+    status: 'closed',
+    updated_at: '2026-01-18T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'cust-early-h2',
+    customer_id: 'cust-early',
+    currency_code: 'USD',
+    issue_date: '2026-02-01',
+    due_date: '2026-02-20',
+    total_minor: 1100,
+    open_amount_minor: 0,
+    paid_amount_minor: 1100,
+    status: 'closed',
+    updated_at: '2026-02-19T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-open-late',
+    customer_id: 'cust-late',
+    currency_code: 'USD',
+    issue_date: '2026-03-01',
+    due_date: '2026-03-10',
+    total_minor: 5000,
+    open_amount_minor: 5000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-03-01T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-open-early',
+    customer_id: 'cust-early',
+    currency_code: 'USD',
+    issue_date: '2026-03-01',
+    due_date: '2026-03-30',
+    total_minor: 5000,
+    open_amount_minor: 5000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-03-01T00:00:00.000Z'
+  });
+
+  const predictionA = analyticsService.getCollectionsPrediction(tenantId);
+  const predictionB = analyticsService.getCollectionsPrediction(tenantId);
+  assert.equal(predictionA.assistive_only, true);
+  assert.equal(predictionA.no_automatic_actions, true);
+  assert.deepEqual(
+    predictionA.predictions.map((row) => row.invoice_id),
+    ['inv-open-late', 'inv-open-early']
+  );
+
+  const lateInvoice = predictionA.predictions.find((row) => row.invoice_id === 'inv-open-late');
+  const earlyInvoice = predictionA.predictions.find((row) => row.invoice_id === 'inv-open-early');
+  assert.ok(lateInvoice.probability_of_delay > earlyInvoice.probability_of_delay);
+  assert.ok(lateInvoice.drivers.includes('customer_history_late_payments'));
+  assert.ok(
+    predictionA.predictions.every((row) => row.probability_of_delay >= 0.01 && row.probability_of_delay <= 0.99),
+    'all probabilities should be normalized between 0.01 and 0.99'
+  );
+  assert.deepEqual(
+    predictionA.predictions.map((row) => row.probability_of_delay),
+    predictionB.predictions.map((row) => row.probability_of_delay),
+    'prediction output should be deterministic (no random outputs)'
+  );
+});
+
+test('collections prediction responds to simulated late/early shifts', () => {
+  const tenantId = 'tenant-collections-sim';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  for (let index = 0; index < 4; index += 1) {
+    arRepository.upsertInvoice(tenantId, {
+      invoice_id: `hist-${index + 1}`,
+      customer_id: 'cust-a',
+      currency_code: 'USD',
+      issue_date: `2026-01-0${index + 1}`,
+      due_date: `2026-01-1${index + 1}`,
+      total_minor: 1000,
+      open_amount_minor: 0,
+      paid_amount_minor: 1000,
+      status: 'closed',
+      updated_at: `2026-01-1${index + 1}T00:00:00.000Z`
+    });
+  }
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'open-baseline',
+    customer_id: 'cust-a',
+    currency_code: 'USD',
+    issue_date: '2026-03-01',
+    due_date: '2026-03-20',
+    total_minor: 2000,
+    open_amount_minor: 2000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-03-01T00:00:00.000Z'
+  });
+
+  const baseline = analyticsService.getCollectionsPrediction(tenantId).predictions[0].probability_of_delay;
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'hist-late-sim',
+    customer_id: 'cust-a',
+    currency_code: 'USD',
+    issue_date: '2026-02-01',
+    due_date: '2026-02-10',
+    total_minor: 1000,
+    open_amount_minor: 0,
+    paid_amount_minor: 1000,
+    status: 'closed',
+    updated_at: '2026-03-05T00:00:00.000Z'
+  });
+
+  const simulatedLate = analyticsService.getCollectionsPrediction(tenantId).predictions[0].probability_of_delay;
+  assert.ok(simulatedLate > baseline, 'late payment simulation should increase delay probability');
+});
+
 test('analytics read-only guard blocks non-GET methods', () => {
   const guard = new AnalyticsReadOnlyGuard();
   assert.equal(guard.canActivate(buildExecutionContext('GET')), true);
