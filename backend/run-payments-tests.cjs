@@ -29,7 +29,12 @@ const sourceFiles = [
   'src/modules/events/queue/event-queue.types.ts',
   'src/modules/events/queue/in-memory-queue.driver.ts',
   'src/modules/events/queue/queue.constants.ts',
-  'src/modules/events/queue/event-queue.publisher.ts'
+  'src/modules/events/queue/event-queue.publisher.ts',
+  'src/modules/events/queue/event-processing.registry.ts',
+  'src/modules/events/queue/event-processing.worker.ts',
+  'src/modules/ar/ar.repository.ts',
+  'src/modules/ar/ar.service.ts',
+  'src/modules/ar/ar.events.handler.ts',
 ];
 
 const srcRoot = path.resolve(__dirname);
@@ -58,3 +63,4 @@ for (const relativeFile of sourceFiles) {
 
 require('node:test');
 require('./test/payments.idempotency.spec.js');
+require('./test/ar.service.spec.js');

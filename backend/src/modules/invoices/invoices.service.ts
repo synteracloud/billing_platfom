@@ -173,6 +173,7 @@ export class InvoicesService {
         idempotency_key: idempotencyKey,
         payload: {
           invoice_id: invoiceId,
+          customer_id: issuedInvoice.customer_id,
           issue_date: issueDate,
           due_date: issuedInvoice.due_date,
           total_minor: issuedInvoice.total_minor,

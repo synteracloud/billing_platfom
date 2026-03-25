@@ -54,6 +54,7 @@ export type InvoiceCreatedPayload = {
 
 export type InvoiceIssuedPayload = {
   invoice_id: string;
+  customer_id: string;
   issue_date: string;
   due_date: string | null;
   total_minor: number;
