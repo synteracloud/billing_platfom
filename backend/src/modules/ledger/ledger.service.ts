@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
 import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
-import { BillCreatedPayload, DomainEvent, InvoiceIssuedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
+import { BillCreatedPayload, DomainEvent, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
@@ -12,6 +12,7 @@ import { LedgerRepository } from './ledger.repository';
 const SUPPORTED_EVENT_NAMES = new Set([
   'billing.invoice.created.v1',
   'billing.invoice.issued.v1',
+  'billing.payment.recorded.v1',
   'billing.payment.settled.v1',
   'billing.payment.refunded.v1',
   'billing.bill.created.v1',
@@ -39,6 +40,10 @@ const EVENT_DIRECTIONAL_ACCOUNT_RULES = new Map<string, Array<{ direction: Journ
   ['billing.payment.settled.v1', [
     { direction: 'debit', codes: ['1000', '1010'] },
     { direction: 'credit', codes: ['1100', '2200'] }
+  ]],
+  ['billing.payment.recorded.v1', [
+    { direction: 'debit', codes: ['1000', '1010'] },
+    { direction: 'credit', codes: ['2200'] }
   ]],
   ['billing.payment.refunded.v1', [
     { direction: 'debit', codes: ['5010', '1100'] },
@@ -372,6 +377,25 @@ export class LedgerService {
           entries: [
             this.createPostingLine('1000', 'Cash', 'debit', allocationContext.allocated_minor, payload.currency_code),
             this.createPostingLine('1100', 'Accounts Receivable', 'credit', allocationContext.allocated_minor, payload.currency_code)
+          ]
+        };
+      }
+      case 'billing.payment.recorded.v1': {
+        const payload = event.payload as PaymentRecordedPayload;
+        const receivedDate = event.occurred_at.slice(0, 10);
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'payment',
+          source_id: payload.payment_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: receivedDate,
+          currency_code: payload.currency_code,
+          description: `Payment received ${payload.payment_id}`,
+          entries: [
+            this.createPostingLine('1000', 'Cash', 'debit', payload.amount_minor, payload.currency_code),
+            this.createPostingLine('2200', 'Unallocated Cash', 'credit', payload.amount_minor, payload.currency_code)
           ]
         };
       }

@@ -117,6 +117,26 @@ export const POSTING_RULE_EXPECTATIONS: PostingRuleExpectation[] = [
     ]
   },
   {
+    eventType: 'billing.payment.recorded.v1',
+    requiredAccounts: [
+      {
+        key: 'cash',
+        allowedTypes: ['asset'],
+        rationale: 'Recorded/received payments debit cash when receipts are recognized.'
+      },
+      {
+        key: 'bank_clearing',
+        allowedTypes: ['asset'],
+        rationale: 'Recorded/received payments may initially debit bank clearing based on processor timing.'
+      },
+      {
+        key: 'unallocated_cash',
+        allowedTypes: ['liability'],
+        rationale: 'Recorded/received payments credit unallocated cash until allocation to receivables.'
+      }
+    ]
+  },
+  {
     eventType: 'billing.payment.settled.v1',
     requiredAccounts: [
       {
