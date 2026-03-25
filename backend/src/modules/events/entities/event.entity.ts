@@ -104,6 +104,11 @@ export type PaymentSettledPayload = {
   settled_at: string;
   amount_minor: number;
   currency_code: string;
+  allocated_minor?: number;
+  allocation_id?: string;
+  allocation_ids?: string[];
+  allocation_changes?: PaymentAllocationChange[];
+  total_allocated_minor?: number;
 };
 
 export type PaymentAllocatedPayload = {
