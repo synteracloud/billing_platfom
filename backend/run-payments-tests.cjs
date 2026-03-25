@@ -32,6 +32,17 @@ const sourceFiles = [
   'src/modules/events/queue/event-queue.publisher.ts',
   'src/modules/events/queue/event-processing.registry.ts',
   'src/modules/events/queue/event-processing.worker.ts',
+  'src/modules/customers/customer-balance.repository.ts',
+  'src/modules/customers/customer-balance.service.ts',
+  'src/modules/customers/customer-balance-events.consumer.ts',
+  'src/modules/ledger/entities/journal-entry.entity.ts',
+  'src/modules/ledger/entities/journal-line.entity.ts',
+  'src/modules/ledger/ledger.repository.ts',
+  'src/modules/accounting/entities/chart-of-account.entity.ts',
+  'src/modules/accounting/chart-of-accounts.defaults.ts',
+  'src/modules/ledger/ledger.service.ts',
+  'src/modules/ledger/ledger-invoice-created.consumer.ts',
+  'src/modules/ledger/payment-received-ledger.consumer.ts',
   'src/modules/ar/ar.repository.ts',
   'src/modules/ar/ar.service.ts',
   'src/modules/ar/ar.events.handler.ts',
@@ -64,3 +75,5 @@ for (const relativeFile of sourceFiles) {
 require('node:test');
 require('./test/payments.idempotency.spec.js');
 require('./test/ar.service.spec.js');
+require('./test/customer-balance.consumer.spec.js');
+require('./test/ar.batch6.qc.spec.js');

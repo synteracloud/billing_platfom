@@ -5,10 +5,16 @@ interface BalanceMutationResult {
   applied: boolean;
 }
 
+interface EventDelta {
+  tenant_id: string;
+  customer_id: string;
+  event_key: string;
+  delta_minor: number;
+}
+
 @Injectable()
 export class CustomerBalanceRepository {
-  private readonly balances = new Map<string, number>();
-  private readonly processedEvents = new Set<string>();
+  private readonly eventDeltas = new Map<string, EventDelta>();
 
   applyEventDelta(
     tenantId: string,
@@ -17,32 +23,37 @@ export class CustomerBalanceRepository {
     deltaMinor: number
   ): BalanceMutationResult {
     const processedKey = this.processedEventKey(tenantId, customerId, consumerEventKey);
-    if (this.processedEvents.has(processedKey)) {
+    if (this.eventDeltas.has(processedKey)) {
       return {
         balance_minor: this.getBalance(tenantId, customerId),
         applied: false
       };
     }
 
-    const balanceKey = this.balanceKey(tenantId, customerId);
-    const currentBalance = this.balances.get(balanceKey) ?? 0;
-    const nextBalance = currentBalance + deltaMinor;
-
-    this.balances.set(balanceKey, nextBalance);
-    this.processedEvents.add(processedKey);
+    this.eventDeltas.set(processedKey, {
+      tenant_id: tenantId,
+      customer_id: customerId,
+      event_key: consumerEventKey,
+      delta_minor: deltaMinor
+    });
 
     return {
-      balance_minor: nextBalance,
+      balance_minor: this.getBalance(tenantId, customerId),
       applied: true
     };
   }
 
   getBalance(tenantId: string, customerId: string): number {
-    return this.balances.get(this.balanceKey(tenantId, customerId)) ?? 0;
-  }
+    let balance = 0;
+    for (const eventDelta of this.eventDeltas.values()) {
+      if (eventDelta.tenant_id !== tenantId || eventDelta.customer_id !== customerId) {
+        continue;
+      }
 
-  private balanceKey(tenantId: string, customerId: string): string {
-    return `${tenantId}:${customerId}`;
+      balance += eventDelta.delta_minor;
+    }
+
+    return balance;
   }
 
   private processedEventKey(tenantId: string, customerId: string, consumerEventKey: string): string {

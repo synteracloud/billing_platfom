@@ -36,11 +36,11 @@ function setup() {
   return { registry, balanceService };
 }
 
-test('applies invoice.created and payment.received deltas to customer_balance', async () => {
+test('applies invoice.created and payment.allocated deltas to customer_balance', async () => {
   const { registry, balanceService } = setup();
 
   const invoiceEvent = envelope({
-    event_name: 'invoice.created',
+    event_name: 'billing.invoice.created.v1',
     event_id: 'evt-inv-1',
     payload: {
       customer_id: 'cust-1',
@@ -48,23 +48,23 @@ test('applies invoice.created and payment.received deltas to customer_balance', 
     }
   });
 
-  const paymentEvent = envelope({
-    event_name: 'payment.received',
+  const paymentAllocatedEvent = envelope({
+    event_name: 'billing.payment.allocated.v1',
     event_id: 'evt-pay-1',
     aggregate_type: 'payment',
     aggregate_id: 'payment-1',
     payload: {
       customer_id: 'cust-1',
-      amount_minor: 400
+      allocation_changes: [{ allocated_delta_minor: 400 }]
     }
   });
 
-  for (const handler of registry.getHandlers('invoice.created')) {
+  for (const handler of registry.getHandlers('billing.invoice.created.v1')) {
     await handler.handle(invoiceEvent);
   }
 
-  for (const handler of registry.getHandlers('payment.received')) {
-    await handler.handle(paymentEvent);
+  for (const handler of registry.getHandlers('billing.payment.allocated.v1')) {
+    await handler.handle(paymentAllocatedEvent);
   }
 
   assert.equal(balanceService.getBalance('tenant-1', 'cust-1'), 600);
@@ -83,13 +83,13 @@ test('duplicate events do not double-apply customer balance changes', async () =
   });
 
   const paymentEvent = envelope({
-    event_name: 'billing.payment.recorded.v1',
+    event_name: 'billing.payment.allocated.v1',
     event_id: 'evt-dup-pay',
     aggregate_type: 'payment',
     aggregate_id: 'payment-dup',
     payload: {
       customer_id: 'cust-dup',
-      amount_minor: 250
+      allocation_changes: [{ allocated_delta_minor: 250 }]
     }
   });
 
@@ -98,7 +98,7 @@ test('duplicate events do not double-apply customer balance changes', async () =
     await handler.handle(invoiceEvent);
   }
 
-  for (const handler of registry.getHandlers('billing.payment.recorded.v1')) {
+  for (const handler of registry.getHandlers('billing.payment.allocated.v1')) {
     await handler.handle(paymentEvent);
     await handler.handle(paymentEvent);
   }

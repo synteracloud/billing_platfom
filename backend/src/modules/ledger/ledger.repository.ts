@@ -68,6 +68,15 @@ export class LedgerRepository {
       .map((line) => this.freeze({ ...line }));
   }
 
+
+  listEntries(tenantId: string): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    return [...this.journalEntries.values()]
+      .filter((entry) => entry.tenant_id === tenantId)
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
+      .map((entry) => this.findById(tenantId, entry.id)!)
+      .filter(Boolean);
+  }
+
   createSnapshot(): {
     journalEntries: Map<string, JournalEntryEntity>;
     journalLines: Map<string, JournalLineEntity>;

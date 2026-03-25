@@ -8,9 +8,11 @@ type InvoiceCreatedPayload = {
   total_minor?: number;
 };
 
-type PaymentReceivedPayload = {
+type PaymentAllocatedPayload = {
   customer_id?: string;
-  amount_minor?: number;
+  allocation_changes?: Array<{
+    allocated_delta_minor?: number;
+  }>;
 };
 
 @Injectable()
@@ -28,11 +30,14 @@ export class CustomerBalanceEventsConsumer implements OnApplicationBootstrap {
       this.consumeInvoiceCreated(event);
     });
 
-    this.eventProcessingRegistry.register('billing.payment.recorded.v1', 'ar-customer-balance', async (event) => {
-      this.consumePaymentReceived(event);
+    this.eventProcessingRegistry.register('billing.payment.allocated.v1', 'ar-customer-balance', async (event) => {
+      this.consumePaymentAllocated(event);
+    });
+    this.eventProcessingRegistry.register('billing.payment.refunded.v1', 'ar-customer-balance', async (event) => {
+      this.consumePaymentAllocated(event, -1);
     });
     this.eventProcessingRegistry.register('payment.received', 'ar-customer-balance', async (event) => {
-      this.consumePaymentReceived(event);
+      this.consumeLegacyPaymentReceived(event);
     });
   }
 
@@ -51,8 +56,28 @@ export class CustomerBalanceEventsConsumer implements OnApplicationBootstrap {
     );
   }
 
-  private consumePaymentReceived(event: QueueEnvelope): void {
-    const payload = (event.payload ?? {}) as PaymentReceivedPayload;
+  private consumePaymentAllocated(event: QueueEnvelope, sign = 1): void {
+    const payload = (event.payload ?? {}) as PaymentAllocatedPayload;
+    const customerId = payload.customer_id?.trim();
+    if (!customerId) {
+      return;
+    }
+
+    const allocatedMinor = (payload.allocation_changes ?? []).reduce((sum, change) => {
+      const delta = this.normalizeMinor(change.allocated_delta_minor);
+      return sum + delta;
+    }, 0);
+
+    this.customerBalanceService.applyPaymentReceived(
+      event.tenant_id,
+      customerId,
+      this.resolveEventId(event),
+      sign * allocatedMinor
+    );
+  }
+
+  private consumeLegacyPaymentReceived(event: QueueEnvelope): void {
+    const payload = (event.payload ?? {}) as { customer_id?: string; amount_minor?: number };
     const customerId = payload.customer_id?.trim();
     if (!customerId) {
       return;
