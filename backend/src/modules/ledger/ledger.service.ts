@@ -335,19 +335,20 @@ export class LedgerService {
       }
       case 'billing.payment.settled.v1': {
         const payload = event.payload as PaymentSettledPayload;
+        const allocationContext = this.resolvePaymentAllocationContext(payload);
         return {
           tenant_id: event.tenant_id,
           source_type: 'payment',
-          source_id: payload.payment_id,
+          source_id: allocationContext.source_id,
           source_event_id: event.id,
           event_name: eventType,
           rule_version: ruleVersion,
           entry_date: payload.settled_at.slice(0, 10),
           currency_code: payload.currency_code,
-          description: `Payment settled ${payload.payment_id}`,
+          description: allocationContext.description,
           entries: [
-            this.createPostingLine('1000', 'Cash', 'debit', payload.amount_minor, payload.currency_code),
-            this.createPostingLine('1100', 'Accounts Receivable', 'credit', payload.amount_minor, payload.currency_code)
+            this.createPostingLine('1000', 'Cash', 'debit', allocationContext.allocated_minor, payload.currency_code),
+            this.createPostingLine('1100', 'Accounts Receivable', 'credit', allocationContext.allocated_minor, payload.currency_code)
           ]
         };
       }
@@ -402,6 +403,50 @@ export class LedgerService {
       direction,
       amount_minor: amountMinor,
       currency_code: currencyCode
+    };
+  }
+
+  private resolvePaymentAllocationContext(payload: PaymentSettledPayload): { allocated_minor: number; source_id: string; description: string } {
+    const totalSettledMinor = payload.amount_minor;
+    const allocatedFromField = Number.isInteger(payload.allocated_minor) ? payload.allocated_minor : null;
+    const allocatedFromTotal = Number.isInteger(payload.total_allocated_minor) ? payload.total_allocated_minor : null;
+    const allocationChanges = Array.isArray(payload.allocation_changes) ? payload.allocation_changes : [];
+    const allocatedFromChanges = allocationChanges
+      .map((item) => item.allocated_delta_minor)
+      .filter((value) => Number.isInteger(value) && value > 0)
+      .reduce((sum, value) => sum + value, 0);
+    const allocatedMinor = allocatedFromField
+      ?? allocatedFromTotal
+      ?? (allocatedFromChanges > 0 ? allocatedFromChanges : totalSettledMinor);
+
+    if (!Number.isInteger(allocatedMinor) || allocatedMinor <= 0) {
+      throw new BadRequestException('Payment settled payload must include a positive allocated amount');
+    }
+
+    if (allocatedMinor > totalSettledMinor) {
+      throw new BadRequestException('Allocated amount cannot exceed settled amount');
+    }
+
+    const allocationIds = new Set<string>();
+    if (payload.allocation_id?.trim()) {
+      allocationIds.add(payload.allocation_id.trim());
+    }
+    for (const allocationId of payload.allocation_ids ?? []) {
+      if (typeof allocationId === 'string' && allocationId.trim()) {
+        allocationIds.add(allocationId.trim());
+      }
+    }
+
+    const allocationReference = Array.from(allocationIds.values()).sort();
+    const allocationSuffix = allocationReference.length > 0 ? ` allocations ${allocationReference.join(',')}` : '';
+    const sourceId = allocationReference.length > 0
+      ? `${payload.payment_id}:${allocationReference.join('+')}`
+      : payload.payment_id;
+
+    return {
+      allocated_minor: allocatedMinor,
+      source_id: sourceId,
+      description: `Payment settled ${payload.payment_id}${allocationSuffix}`.trim()
     };
   }
 
