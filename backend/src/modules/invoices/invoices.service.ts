@@ -402,6 +402,26 @@ export class InvoicesService {
       correlation_id: correlationId,
       payload: { before: invoice, after: updated }
     });
+
+    if (invoice.status !== 'paid' && updated.status === 'paid') {
+      this.eventsService.logEvent({
+        tenant_id: tenantId,
+        type: 'billing.invoice.paid.v1',
+        aggregate_type: 'invoice',
+        aggregate_id: invoiceId,
+        aggregate_version: 3,
+        correlation_id: correlationId,
+        payload: {
+          invoice_id: invoiceId,
+          customer_id: updated.customer_id,
+          payment_status: 'paid',
+          amount_paid_minor: updated.amount_paid_minor,
+          amount_due_minor: updated.amount_due_minor,
+          currency_code: updated.currency,
+          paid_at: new Date().toISOString()
+        }
+      });
+    }
   }
 
   private calculateNetAllocatedMinor(tenantId: string, invoiceId: string): number {

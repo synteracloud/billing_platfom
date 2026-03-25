@@ -5,7 +5,7 @@ import { CustomersService } from '../customers/customers.service';
 import { EventsService } from '../events/events.service';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { InvoicesRepository } from '../invoices/invoices.repository';
-import { canTransitionInvoiceStatus, InvoiceEntity, InvoiceStatus } from '../invoices/entities/invoice.entity';
+import { InvoiceEntity } from '../invoices/entities/invoice.entity';
 import { AllocatePaymentDto } from './dto/allocate-payment.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { PaymentAllocationEntity } from './entities/payment-allocation.entity';
@@ -121,6 +121,7 @@ export class PaymentsService {
       }
 
       let allocationVersion = this.paymentsRepository.listAllocationsByPayment(tenantId, paymentId).length;
+      const allocationChanges: Array<{ invoice_id: string; allocated_delta_minor: number }> = [];
       for (const item of data.allocations) {
         const createdAllocation = this.paymentsRepository.createAllocation({
           tenant_id: tenantId,
@@ -140,23 +141,9 @@ export class PaymentsService {
           correlation_id: paymentId,
           payload: { invoice_id: item.invoice_id, after: createdAllocation }
         });
-
-        this.eventsService.logEvent({
-          tenant_id: tenantId,
-          type: 'billing.invoice.payment_allocation_referenced.v1',
-          aggregate_type: 'invoice',
-          aggregate_id: item.invoice_id,
-          aggregate_version: Math.max(1, allocationVersion),
-          correlation_id: paymentId,
-          idempotency_key: idempotencyKey ? `${idempotencyKey}:invoice-ref:${item.invoice_id}:${allocationVersion}` : undefined,
-          payload: {
-            invoice_id: item.invoice_id,
-            payment_id: paymentId,
-            allocation_id: createdAllocation.id,
-            allocated_minor: item.allocated_minor,
-            allocation_date: createdAllocation.allocation_date,
-            currency_code: payment.currency
-          }
+        allocationChanges.push({
+          invoice_id: item.invoice_id,
+          allocated_delta_minor: item.allocated_minor
         });
       }
 
@@ -179,7 +166,8 @@ export class PaymentsService {
             amount_minor: payment.amount_received_minor,
             allocation_count: data.allocations.length,
             total_allocated_minor: requestedTotal,
-            currency_code: payment.currency
+            currency_code: payment.currency,
+            allocation_changes: allocationChanges
           }
         });
       });
@@ -228,25 +216,6 @@ export class PaymentsService {
         idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:payment:void` : undefined,
         payload: { before: payment, after: updatedPayment }
       });
-
-      for (const allocation of removedAllocations) {
-        this.eventsService.logEvent({
-          tenant_id: tenantId,
-          type: 'billing.invoice.payment_allocation_reversed.v1',
-          aggregate_type: 'invoice',
-          aggregate_id: allocation.invoice_id,
-          aggregate_version: 1,
-          correlation_id: paymentId,
-          idempotency_key: idempotencyKey ? `${idempotencyKey}:invoice-ref-reversed:${allocation.id}` : undefined,
-          payload: {
-            invoice_id: allocation.invoice_id,
-            payment_id: paymentId,
-            allocation_id: allocation.id,
-            reversed_minor: allocation.allocated_minor,
-            currency_code: payment.currency
-          }
-        });
-      }
 
       this.eventsService.logEvent({
         tenant_id: tenantId,
@@ -320,81 +289,6 @@ export class PaymentsService {
       correlation_id: correlationId,
       payload: { before: payment, after: updated }
     });
-  }
-
-  private syncInvoicePaymentStatus(tenantId: string, invoiceId: string, correlationId: string): void {
-    const invoice = this.invoicesRepository.findById(tenantId, invoiceId);
-    if (!invoice || invoice.status === 'void' || invoice.status === 'draft') {
-      return;
-    }
-
-    const allocated = this.paymentsRepository.sumAllocatedForInvoice(tenantId, invoiceId);
-    const paidMinor = Math.min(allocated, invoice.total_minor);
-    const dueMinor = Math.max(0, invoice.total_minor - paidMinor);
-
-    const nextStatus: InvoiceStatus = dueMinor === 0 ? 'paid' : 'issued';
-
-    if (!canTransitionInvoiceStatus(invoice.status, nextStatus)) {
-      throw new ConflictException(`Invalid invoice status transition: ${invoice.status} -> ${nextStatus}`);
-    }
-
-    if (nextStatus === 'paid' && invoice.status !== 'paid') {
-      this.eventsService.logEvent({
-        tenant_id: tenantId,
-        type: 'billing.invoice.paid.v1',
-        aggregate_type: 'invoice',
-        aggregate_id: invoiceId,
-        aggregate_version: 3,
-        correlation_id: correlationId,
-        payload: {
-          invoice_id: invoiceId,
-          paid_at: new Date().toISOString(),
-          amount_paid_minor: paidMinor,
-          currency_code: invoice.currency,
-          payment_id: correlationId
-        }
-      });
-    }
-
-    const updated = this.invoicesRepository.update(tenantId, invoiceId, {
-      status: nextStatus,
-      amount_paid_minor: paidMinor,
-      amount_due_minor: dueMinor
-    });
-
-    if (!updated) {
-      throw new NotFoundException(`Invoice not found: ${invoiceId}`);
-    }
-
-    this.eventsService.logMutation({
-      tenant_id: tenantId,
-      entity_type: 'invoice',
-      entity_id: invoiceId,
-      action: 'payment_status_synced',
-      aggregate_version: nextStatus === 'issued' ? 2 : 3,
-      correlation_id: correlationId,
-      payload: { before: invoice, after: updated }
-    });
-
-    if (invoice.status !== 'paid' && updated.status === 'paid') {
-      this.eventsService.logEvent({
-        tenant_id: tenantId,
-        type: 'billing.invoice.paid.v1',
-        aggregate_type: 'invoice',
-        aggregate_id: invoiceId,
-        aggregate_version: 3,
-        correlation_id: correlationId,
-        payload: {
-          invoice_id: invoiceId,
-          customer_id: updated.customer_id,
-          payment_status: 'paid',
-          amount_paid_minor: updated.amount_paid_minor,
-          amount_due_minor: updated.amount_due_minor,
-          currency_code: updated.currency,
-          paid_at: new Date().toISOString()
-        }
-      });
-    }
   }
 
   private buildPaymentDetails(tenantId: string, payment: PaymentEntity): PaymentDetails {
