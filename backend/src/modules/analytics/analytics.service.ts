@@ -5,6 +5,32 @@ import { LedgerRepository } from '../ledger/ledger.repository';
 
 const CASH_ACCOUNT_CODES = new Set(['1000', '1010']);
 
+export type TransactionClassificationCategory =
+  | 'expense'
+  | 'revenue'
+  | 'asset'
+  | 'liability'
+  | 'transfer'
+  | 'equity'
+  | 'other';
+
+export interface ClassificationInput {
+  amount_minor?: number | null;
+  transaction_description?: string | null;
+  metadata?: Record<string, unknown> | null;
+  ocr?: {
+    text?: string | null;
+    fields?: Record<string, string | number | boolean | null> | null;
+  } | null;
+}
+
+export interface ClassificationResult {
+  category: TransactionClassificationCategory;
+  confidence_score: number;
+  rationale: string[];
+  deterministic_fallback_used: boolean;
+}
+
 export interface CashflowPoint {
   date: string;
   inflow_minor: number;
@@ -41,22 +67,26 @@ export interface RunwayReport {
   based_on_horizon_days: number;
 }
 
-export interface CollectionPrediction {
-  invoice_id: string;
-  customer_id: string;
-  due_date: string | null;
-  open_amount_minor: number;
-  probability_of_delay: number;
-  risk_level: 'low' | 'medium' | 'high';
-  drivers: string[];
+export interface AnomalyItem {
+  type: 'unusual_expense' | 'abnormal_cashflow_change' | 'outlier';
+  date: string;
+  amount_minor: number;
+  metric: 'outflow_minor' | 'net_minor' | 'abs_net_minor';
+  threshold_minor: number;
+  score: number;
+  note: string;
 }
 
-export interface CollectionsPredictionReport {
-  assistive_only: true;
-  no_automatic_actions: true;
-  model_version: string;
-  generated_at: string;
-  predictions: CollectionPrediction[];
+export interface AnomalyReport {
+  currency_code: string;
+  analysis_mode: 'read_only';
+  automated_actions_enabled: false;
+  thresholds: {
+    robust_z_score: number;
+    min_samples: number;
+    minimum_absolute_minor: number;
+  };
+  anomalies: AnomalyItem[];
 }
 
 @Injectable()
@@ -163,82 +193,84 @@ export class AnalyticsService {
     };
   }
 
-  getCollectionsPrediction(tenantId: string): CollectionsPredictionReport {
-    const invoices = this.arRepository.listInvoices(tenantId);
-    const openInvoices = invoices.filter((invoice) => invoice.status === 'open' && invoice.open_amount_minor > 0);
-    const historical = invoices.filter((invoice) => invoice.status === 'closed' && Boolean(invoice.due_date));
-    const byCustomer = new Map<string, typeof historical>();
+  getAnomalies(tenantId: string): AnomalyReport {
+    const cashflow = this.getCashflow(tenantId);
+    const byDay = cashflow.by_day;
+    const anomalies: AnomalyItem[] = [];
 
-    for (const entry of historical) {
-      const bucket = byCustomer.get(entry.customer_id) ?? [];
-      bucket.push(entry);
-      byCustomer.set(entry.customer_id, bucket);
-    }
+    const robustZScore = 3.2;
+    const minSamples = 6;
+    const minimumAbsoluteMinor = 1000;
 
-    const portfolioPattern = this.computePattern(historical);
-    const portfolioOpenAmounts = openInvoices.map((invoice) => invoice.open_amount_minor);
+    const outflows = byDay.map((point) => point.outflow_minor);
+    const netSeries = byDay.map((point) => point.net_minor);
+    const absNetSeries = byDay.map((point) => Math.abs(point.net_minor));
 
-    const predictions = openInvoices
-      .map((invoice) => {
-        const customerPattern = this.computePattern(byCustomer.get(invoice.customer_id) ?? []);
-        const effectiveLateRatio = customerPattern.sample_size > 0 ? customerPattern.late_ratio : portfolioPattern.late_ratio;
-        const effectiveAvgDelay = customerPattern.sample_size > 0 ? customerPattern.avg_delay_days : portfolioPattern.avg_delay_days;
-        const overdueDays = invoice.due_date ? this.dayDistance(invoice.due_date, this.todayUtcDate()) : 0;
-        const normalizedOverdue = this.normalize(overdueDays, 0, 45);
-        const normalizedDelayPattern = this.normalize(effectiveAvgDelay, 0, 30);
-        const normalizedOpenAmount = this.normalize(
-          invoice.open_amount_minor,
-          0,
-          Math.max(1, this.percentile95(portfolioOpenAmounts))
-        );
-        const paymentCompletionRatio = invoice.total_minor > 0
-          ? this.normalize(invoice.paid_amount_minor / invoice.total_minor, 0, 1)
-          : 0;
-        const normalizedUnpaidRatio = this.normalize(1 - paymentCompletionRatio, 0, 1);
+    const outflowStats = this.computeRobustStats(outflows);
+    const absNetStats = this.computeRobustStats(absNetSeries);
+    const netChanges = byDay.slice(1).map((point, index) => point.net_minor - byDay[index].net_minor);
+    const netChangeStats = this.computeRobustStats(netChanges);
 
-        const score = 0.1
-          + (effectiveLateRatio * 0.35)
-          + (normalizedDelayPattern * 0.25)
-          + (normalizedOverdue * 0.25)
-          + (normalizedOpenAmount * 0.1)
-          + (normalizedUnpaidRatio * 0.1);
-
-        const probability = this.roundProbability(this.normalize(score, 0, 1));
-        const drivers: string[] = [];
-        if (effectiveLateRatio >= 0.4) {
-          drivers.push('customer_history_late_payments');
-        }
-        if (effectiveAvgDelay >= 7) {
-          drivers.push('customer_average_delay_high');
-        }
-        if (overdueDays > 0) {
-          drivers.push('invoice_currently_overdue');
-        }
-        if (normalizedOpenAmount >= 0.75) {
-          drivers.push('high_open_balance');
-        }
-        if (drivers.length === 0) {
-          drivers.push('stable_payment_pattern');
+    byDay.forEach((point, index) => {
+      if (byDay.length >= minSamples) {
+        const outflowScore = this.computeRobustScore(point.outflow_minor, outflowStats.median, outflowStats.mad);
+        if (point.outflow_minor >= minimumAbsoluteMinor && outflowScore >= robustZScore) {
+          anomalies.push({
+            type: 'unusual_expense',
+            date: point.date,
+            amount_minor: point.outflow_minor,
+            metric: 'outflow_minor',
+            threshold_minor: this.computeThreshold(outflowStats.median, outflowStats.mad, robustZScore),
+            score: Number(outflowScore.toFixed(2)),
+            note: 'Expense outflow is materially above normal baseline.'
+          });
         }
 
-        return {
-          invoice_id: invoice.invoice_id,
-          customer_id: invoice.customer_id,
-          due_date: invoice.due_date,
-          open_amount_minor: invoice.open_amount_minor,
-          probability_of_delay: probability,
-          risk_level: this.toRiskLevel(probability),
-          drivers
-        } satisfies CollectionPrediction;
-      })
-      .sort((left, right) => right.probability_of_delay - left.probability_of_delay || left.invoice_id.localeCompare(right.invoice_id));
+        const previousPoint = index > 0 ? byDay[index - 1] : null;
+        const netChangeMinor = previousPoint ? point.net_minor - previousPoint.net_minor : 0;
+        const netChangeScore = this.computeRobustScore(netChangeMinor, netChangeStats.median, netChangeStats.mad);
+        if (
+          previousPoint &&
+          Math.abs(netChangeMinor) >= minimumAbsoluteMinor &&
+          (Math.abs(netChangeScore) >= robustZScore ||
+            Math.abs(netChangeMinor) >= minimumAbsoluteMinor * 2.5)
+        ) {
+          anomalies.push({
+            type: 'abnormal_cashflow_change',
+            date: point.date,
+            amount_minor: netChangeMinor,
+            metric: 'net_minor',
+            threshold_minor: this.computeThreshold(netChangeStats.median, netChangeStats.mad, robustZScore),
+            score: Number(netChangeScore.toFixed(2)),
+            note: 'Net cashflow shift deviates significantly from expected pattern.'
+          });
+        }
+
+        const absNetScore = this.computeRobustScore(Math.abs(point.net_minor), absNetStats.median, absNetStats.mad);
+        if (Math.abs(point.net_minor) >= minimumAbsoluteMinor && absNetScore >= robustZScore + 0.4) {
+          anomalies.push({
+            type: 'outlier',
+            date: point.date,
+            amount_minor: point.net_minor,
+            metric: 'abs_net_minor',
+            threshold_minor: this.computeThreshold(absNetStats.median, absNetStats.mad, robustZScore + 0.4),
+            score: Number(absNetScore.toFixed(2)),
+            note: 'Cash movement magnitude is an outlier versus recent activity.'
+          });
+        }
+      }
+    });
 
     return {
-      assistive_only: true,
-      no_automatic_actions: true,
-      model_version: 'collections.v1',
-      generated_at: new Date().toISOString(),
-      predictions
+      currency_code: cashflow.currency_code,
+      analysis_mode: 'read_only',
+      automated_actions_enabled: false,
+      thresholds: {
+        robust_z_score: robustZScore,
+        min_samples: minSamples,
+        minimum_absolute_minor: minimumAbsoluteMinor
+      },
+      anomalies
     };
   }
 
@@ -262,77 +294,36 @@ export class AnalyticsService {
     };
   }
 
-  private computePattern(invoices: Array<{ due_date: string | null; updated_at: string }>): {
-    sample_size: number;
-    late_ratio: number;
-    avg_delay_days: number;
-  } {
-    const valid = invoices.filter((invoice) => Boolean(invoice.due_date));
-    if (valid.length === 0) {
-      return {
-        sample_size: 0,
-        late_ratio: 0.2,
-        avg_delay_days: 3
-      };
-    }
-
-    const delays = valid.map((invoice) => {
-      const paidDate = invoice.updated_at.slice(0, 10);
-      const dueDate = invoice.due_date as string;
-      return Math.max(0, this.dayDistance(dueDate, paidDate));
-    });
-    const lateCount = delays.filter((delay) => delay > 0).length;
-    const lateRatio = lateCount / valid.length;
-    const avgDelay = delays.reduce((sum, delay) => sum + delay, 0) / valid.length;
-
-    return {
-      sample_size: valid.length,
-      late_ratio: this.normalize(lateRatio, 0, 1),
-      avg_delay_days: Math.max(0, avgDelay)
-    };
+  private computeRobustStats(values: number[]): { median: number; mad: number } {
+    const median = this.computeMedian(values);
+    const deviations = values.map((value) => Math.abs(value - median));
+    const mad = this.computeMedian(deviations);
+    return { median, mad };
   }
 
-  private percentile95(values: number[]): number {
+  private computeMedian(values: number[]): number {
     if (values.length === 0) {
-      return 1;
+      return 0;
     }
+
     const sorted = [...values].sort((left, right) => left - right);
-    const index = Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * 0.95));
-    return sorted[index];
-  }
-
-  private normalize(value: number, min: number, max: number): number {
-    if (!Number.isFinite(value) || max <= min) {
-      return 0;
+    const middle = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+      return (sorted[middle - 1] + sorted[middle]) / 2;
     }
-    const normalized = (value - min) / (max - min);
-    return Math.max(0, Math.min(1, normalized));
+
+    return sorted[middle];
   }
 
-  private dayDistance(from: string, to: string): number {
-    const fromTime = Date.parse(`${from}T00:00:00.000Z`);
-    const toTime = Date.parse(`${to}T00:00:00.000Z`);
-    if (!Number.isFinite(fromTime) || !Number.isFinite(toTime)) {
-      return 0;
+  private computeRobustScore(value: number, median: number, mad: number): number {
+    if (mad === 0) {
+      return value === median ? 0 : Number.POSITIVE_INFINITY;
     }
-    return Math.floor((toTime - fromTime) / 86_400_000);
+
+    return (0.6745 * (value - median)) / mad;
   }
 
-  private roundProbability(value: number): number {
-    return Math.round(Math.max(0.01, Math.min(0.99, value)) * 1000) / 1000;
-  }
-
-  private toRiskLevel(probability: number): 'low' | 'medium' | 'high' {
-    if (probability >= 0.67) {
-      return 'high';
-    }
-    if (probability >= 0.34) {
-      return 'medium';
-    }
-    return 'low';
-  }
-
-  private todayUtcDate(): string {
-    return new Date().toISOString().slice(0, 10);
+  private computeThreshold(median: number, mad: number, zScore: number): number {
+    return Math.round(median + (zScore * mad) / 0.6745);
   }
 }

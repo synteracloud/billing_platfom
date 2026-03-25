@@ -29,8 +29,8 @@ export class AnalyticsController {
     return this.analyticsService.getRunway(request.tenant.id, parsed);
   }
 
-  @Get('collections-prediction')
-  getCollectionsPrediction(@Req() request: AuthenticatedRequest) {
-    return this.analyticsService.getCollectionsPrediction(request.tenant.id);
+  @Get('anomalies')
+  getAnomalies(@Req() request: AuthenticatedRequest) {
+    return this.analyticsService.getAnomalies(request.tenant.id);
   }
 }
