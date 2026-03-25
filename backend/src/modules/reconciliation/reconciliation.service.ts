@@ -1,12 +1,31 @@
 import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import {
+  CreateReconciliationSuggestionsDto,
+  ReconciliationSuggestionCandidateDto,
+  ReconciliationSuggestionTransactionDto
+} from './dto/reconciliation-suggestions.dto';
 import { randomUUID } from 'crypto';
-import { EventsService } from '../events/events.service';
+import type { EventsService } from '../events/events.service';
 import {
   CreateReconciliationResultInput,
   ManualOverrideInput,
   ReconciliationResult
 } from './entities/manual-reconciliation.entity';
 import { ManualMatchRecord, ReconciliationItem, ReconciliationRepository } from './reconciliation.repository';
+
+
+export interface ReconciliationSuggestion {
+  unmatched_transaction_id: string;
+  suggested_candidate_id: string | null;
+  confidence_score: number;
+  rationale: string[];
+  candidate_rankings: Array<{
+    candidate_id: string;
+    confidence_score: number;
+  }>;
+  requires_manual_override: boolean;
+  auto_apply: false;
+}
 
 interface CreateManualMatchInput {
   left_item_id: string;
@@ -122,6 +141,162 @@ export class ReconciliationService {
     }
 
     return matches.filter((match) => match.left_item_id === itemId || match.right_item_id === itemId);
+  }
+
+
+  suggestMatches(input: CreateReconciliationSuggestionsDto): ReconciliationSuggestion[] {
+    return input.unmatched_transactions
+      .map((transaction) => this.createSuggestionForTransaction(transaction, input.matching_candidates))
+      .sort((a, b) => a.unmatched_transaction_id.localeCompare(b.unmatched_transaction_id));
+  }
+
+  private createSuggestionForTransaction(
+    transaction: ReconciliationSuggestionTransactionDto,
+    candidates: ReconciliationSuggestionCandidateDto[]
+  ): ReconciliationSuggestion {
+    const scoredCandidates = candidates
+      .filter((candidate) => this.isComparable(transaction, candidate))
+      .map((candidate) => ({
+        candidate_id: candidate.id,
+        score: this.computeConfidenceScore(transaction, candidate),
+        reasons: this.buildRationale(transaction, candidate)
+      }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+
+        return a.candidate_id.localeCompare(b.candidate_id);
+      });
+
+    if (scoredCandidates.length === 0) {
+      return {
+        unmatched_transaction_id: transaction.id,
+        suggested_candidate_id: null,
+        confidence_score: 0,
+        rationale: ['No candidate passed currency/tenant compatibility checks'],
+        candidate_rankings: [],
+        requires_manual_override: true,
+        auto_apply: false
+      };
+    }
+
+    const top = scoredCandidates[0];
+    const next = scoredCandidates[1];
+    const confidenceGap = next ? top.score - next.score : 1;
+    const isConfident = top.score >= 0.55 && confidenceGap >= 0.08;
+
+    return {
+      unmatched_transaction_id: transaction.id,
+      suggested_candidate_id: isConfident ? top.candidate_id : null,
+      confidence_score: Number(top.score.toFixed(4)),
+      rationale: isConfident
+        ? top.reasons
+        : [...top.reasons, 'Top candidates are too close; requires analyst confirmation'],
+      candidate_rankings: scoredCandidates
+        .slice(0, 5)
+        .map((candidate) => ({
+          candidate_id: candidate.candidate_id,
+          confidence_score: Number(candidate.score.toFixed(4))
+        })),
+      requires_manual_override: true,
+      auto_apply: false
+    };
+  }
+
+  private isComparable(
+    transaction: ReconciliationSuggestionTransactionDto,
+    candidate: ReconciliationSuggestionCandidateDto
+  ): boolean {
+    return transaction.tenant_id === candidate.tenant_id && transaction.currency_code === candidate.currency_code;
+  }
+
+  private computeConfidenceScore(
+    transaction: ReconciliationSuggestionTransactionDto,
+    candidate: ReconciliationSuggestionCandidateDto
+  ): number {
+    const amountDistance = Math.abs(transaction.amount_minor - candidate.amount_minor);
+    const amountMax = Math.max(transaction.amount_minor, candidate.amount_minor, 1);
+    const amountSimilarity = Math.max(0, 1 - amountDistance / amountMax);
+
+    const dateDistance = this.diffInDays(transaction.occurred_at, candidate.occurred_at);
+    const dateScore = dateDistance <= 7 ? Math.max(0, 1 - dateDistance / 7) : 0;
+
+    const referenceScore = this.normalizedReferenceMatch(transaction.reference_id, candidate.reference_id) ? 1 : 0;
+    const counterpartyScore = this.counterpartySimilarity(transaction.counterparty_name, candidate.counterparty_name);
+
+    const weightedScore = amountSimilarity * 0.45 + dateScore * 0.25 + referenceScore * 0.25 + counterpartyScore * 0.05;
+
+    return Math.max(0, Math.min(1, weightedScore));
+  }
+
+  private buildRationale(
+    transaction: ReconciliationSuggestionTransactionDto,
+    candidate: ReconciliationSuggestionCandidateDto
+  ): string[] {
+    const reasons: string[] = [];
+    if (transaction.amount_minor === candidate.amount_minor) {
+      reasons.push('Exact amount match');
+    }
+
+    const dateDistance = this.diffInDays(transaction.occurred_at, candidate.occurred_at);
+    if (dateDistance <= 2) {
+      reasons.push(`Date proximity within ${dateDistance} day(s)`);
+    }
+
+    if (this.normalizedReferenceMatch(transaction.reference_id, candidate.reference_id)) {
+      reasons.push('Reference identifier match');
+    }
+
+    const counterpartyScore = this.counterpartySimilarity(transaction.counterparty_name, candidate.counterparty_name);
+    if (counterpartyScore >= 0.75) {
+      reasons.push('Counterparty names are similar');
+    }
+
+    return reasons.length > 0 ? reasons : ['Weak heuristic alignment'];
+  }
+
+  private normalizedReferenceMatch(left?: string | null, right?: string | null): boolean {
+    if (!left || !right) {
+      return false;
+    }
+
+    return left.trim().toLowerCase() === right.trim().toLowerCase();
+  }
+
+  private counterpartySimilarity(left?: string | null, right?: string | null): number {
+    if (!left || !right) {
+      return 0;
+    }
+
+    const leftNormalized = left.trim().toLowerCase();
+    const rightNormalized = right.trim().toLowerCase();
+    if (!leftNormalized || !rightNormalized) {
+      return 0;
+    }
+
+    if (leftNormalized === rightNormalized) {
+      return 1;
+    }
+
+    if (leftNormalized.includes(rightNormalized) || rightNormalized.includes(leftNormalized)) {
+      return 0.85;
+    }
+
+    return 0;
+  }
+
+  private diffInDays(left: string, right: string): number {
+    const leftTime = Date.parse(left);
+    const rightTime = Date.parse(right);
+
+    if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    const dayMs = 24 * 60 * 60 * 1000;
+    return Math.abs(Math.round((leftTime - rightTime) / dayMs));
   }
 
   createManualMatch(tenantId: string, input: CreateManualMatchInput): ManualMatchRecord {
