@@ -38,6 +38,7 @@ const payloadValidators: {
   },
   'billing.invoice.issued.v1': (payload) => {
     requireString(payload.invoice_id, 'payload.invoice_id');
+    requireString(payload.customer_id, 'payload.customer_id');
     requireString(payload.issue_date, 'payload.issue_date');
     requireNumber(payload.total_minor, 'payload.total_minor');
     requireString(payload.currency_code, 'payload.currency_code');
