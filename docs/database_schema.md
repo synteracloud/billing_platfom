@@ -900,3 +900,31 @@
 **Key indexes**
 - `INDEX (tenant_id, account_id, created_at DESC)`
 - `INDEX (tenant_id, reference_type, reference_id)`
+
+---
+
+### 2.18 `customer_balance` (derived read model)
+
+**Columns**
+- `customer_id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `balance BIGINT NOT NULL`
+- `currency CHAR(3) NOT NULL`
+- `updated_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (tenant_id, customer_id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, customer_id) -> customer(tenant_id, id)`
+
+**Constraints and derivation rules**
+- **Derived only**: table is populated from ledger/event projections, never by direct user writes.
+- Manual `INSERT`/`UPDATE`/`DELETE` are blocked by trigger guard unless run inside the derivation function.
+- Balance is derived from AR control-account postings (`ledger_account.code = '1100'`) using immutable `ledger_entries`.
+- Currency must be consistent per `(tenant_id, customer_id)` projection row.
+- Projection and ledger comparison available via `customer_balance_reconciliation_v`.
+
+**Key indexes**
+- `INDEX (tenant_id, currency)`

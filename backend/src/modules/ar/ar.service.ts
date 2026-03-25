@@ -1,247 +1,113 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { CustomersService } from '../customers/customers.service';
-import { InvoiceEntity } from '../invoices/entities/invoice.entity';
-import { InvoicesRepository } from '../invoices/invoices.repository';
-import { PaymentsRepository } from '../payments/payments.repository';
-
-interface StatementEntry {
-  type: 'invoice' | 'payment';
-  id: string;
-  date: string;
-  reference: string | null;
-  currency: string;
-  amount_minor: number;
-  running_balance_minor: number;
-}
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { EventsService } from '../events/events.service';
+import { InvoiceIssuedPayload, InvoiceVoidedPayload, PaymentAllocatedPayload, PaymentRefundedPayload } from '../events/entities/event.entity';
+import { ArRepository, CustomerFinancialState, ReceivableInvoicePosition } from './ar.repository';
 
 @Injectable()
 export class ArService {
   constructor(
-    private readonly customersService: CustomersService,
-    private readonly invoicesRepository: InvoicesRepository,
-    private readonly paymentsRepository: PaymentsRepository
+    private readonly arRepository: ArRepository,
+    private readonly eventsService: EventsService
   ) {}
 
-  getCustomerBalance(tenantId: string, customerId: string): {
-    customer_id: string;
-    currency: string | null;
-    open_invoices_count: number;
-    total_invoiced_minor: number;
-    total_paid_minor: number;
-    outstanding_balance_minor: number;
-  } {
-    this.customersService.getCustomer(tenantId, customerId);
+  applyInvoiceIssued(tenantId: string, payload: InvoiceIssuedPayload, correlationId: string | null): void {
+    const now = new Date().toISOString();
+    const previous = this.arRepository.findInvoice(tenantId, payload.invoice_id);
+    const baseOpenAmount = previous ? previous.open_amount_minor : payload.total_minor;
 
-    const customerInvoices = this.invoicesRepository
-      .listByTenant(tenantId)
-      .filter((invoice) => invoice.customer_id === customerId && invoice.status !== 'void');
-
-    const currency = this.findSingleCurrency(customerInvoices);
-
-    const totalInvoiced = customerInvoices.reduce((sum, invoice) => sum + invoice.total_minor, 0);
-    const totalPaid = customerInvoices.reduce((sum, invoice) => sum + invoice.amount_paid_minor, 0);
-
-    return {
-      customer_id: customerId,
-      currency,
-      open_invoices_count: customerInvoices.filter((invoice) => invoice.amount_due_minor > 0).length,
-      total_invoiced_minor: totalInvoiced,
-      total_paid_minor: totalPaid,
-      outstanding_balance_minor: customerInvoices.reduce((sum, invoice) => sum + invoice.amount_due_minor, 0)
+    const next: ReceivableInvoicePosition = {
+      invoice_id: payload.invoice_id,
+      customer_id: payload.customer_id,
+      currency_code: payload.currency_code,
+      issue_date: payload.issue_date,
+      due_date: payload.due_date,
+      total_minor: payload.total_minor,
+      open_amount_minor: Math.max(0, Math.min(payload.total_minor, baseOpenAmount)),
+      paid_amount_minor: Math.max(0, payload.total_minor - Math.max(0, Math.min(payload.total_minor, baseOpenAmount))),
+      status: baseOpenAmount <= 0 ? 'closed' : 'open',
+      updated_at: now
     };
+
+    this.arRepository.upsertInvoice(tenantId, next);
+    this.emitReceivableUpdated(tenantId, next, correlationId);
   }
 
-  getAging(tenantId: string, customerId: string, asOf?: string): {
-    customer_id: string;
-    as_of: string;
-    currency: string | null;
-    buckets: Record<'current' | 'days_1_30' | 'days_31_60' | 'days_61_90' | 'days_90_plus', number>;
-    total_outstanding_minor: number;
-  } {
-    this.customersService.getCustomer(tenantId, customerId);
-    const asOfDate = this.resolveAsOfDate(asOf);
-
-    const customerInvoices = this.invoicesRepository
-      .listByTenant(tenantId)
-      .filter((invoice) => invoice.customer_id === customerId && invoice.status === 'issued' && invoice.amount_due_minor > 0);
-
-    const currency = this.findSingleCurrency(customerInvoices);
-    const buckets = {
-      current: 0,
-      days_1_30: 0,
-      days_31_60: 0,
-      days_61_90: 0,
-      days_90_plus: 0
-    };
-
-    for (const invoice of customerInvoices) {
-      const daysPastDue = this.daysPastDue(invoice, asOfDate);
-      if (daysPastDue <= 0) {
-        buckets.current += invoice.amount_due_minor;
-      } else if (daysPastDue <= 30) {
-        buckets.days_1_30 += invoice.amount_due_minor;
-      } else if (daysPastDue <= 60) {
-        buckets.days_31_60 += invoice.amount_due_minor;
-      } else if (daysPastDue <= 90) {
-        buckets.days_61_90 += invoice.amount_due_minor;
-      } else {
-        buckets.days_90_plus += invoice.amount_due_minor;
+  applyPaymentAllocated(tenantId: string, payload: PaymentAllocatedPayload | PaymentRefundedPayload, correlationId: string | null): void {
+    for (const change of payload.allocation_changes) {
+      const invoice = this.arRepository.findInvoice(tenantId, change.invoice_id);
+      if (!invoice || invoice.status === 'void') {
+        continue;
       }
-    }
 
-    return {
-      customer_id: customerId,
-      as_of: asOfDate,
-      currency,
-      buckets,
-      total_outstanding_minor: Object.values(buckets).reduce((sum, value) => sum + value, 0)
-    };
-  }
-
-  getStatement(tenantId: string, customerId: string, options: { from?: string; to?: string }): {
-    customer_id: string;
-    currency: string | null;
-    period: { from: string | null; to: string | null };
-    opening_balance_minor: number;
-    closing_balance_minor: number;
-    entries: StatementEntry[];
-  } {
-    this.customersService.getCustomer(tenantId, customerId);
-
-    const from = this.parseDateOrNull(options.from, 'from');
-    const to = this.parseDateOrNull(options.to, 'to');
-    if (from && to && from > to) {
-      throw new BadRequestException('from must be before or equal to to');
-    }
-
-    const invoices = this.invoicesRepository
-      .listByTenant(tenantId)
-      .filter((invoice) => invoice.customer_id === customerId && invoice.status !== 'void');
-
-    const payments = this.paymentsRepository
-      .listByTenant(tenantId)
-      .filter((payment) => payment.customer_id === customerId && payment.status !== 'void');
-
-    const currency = this.findSingleCurrency(invoices);
-
-    const openingInvoices = invoices
-      .filter((invoice) => from && this.normalizeDate(invoice.issue_date ?? invoice.created_at.slice(0, 10)) < from)
-      .reduce((sum, invoice) => sum + invoice.total_minor, 0);
-
-    const openingPayments = payments
-      .filter((payment) => from && this.normalizeDate(payment.payment_date) < from)
-      .reduce((sum, payment) => sum + payment.amount_received_minor, 0);
-
-    const openingBalance = openingInvoices - openingPayments;
-
-    const invoiceEntries = invoices
-      .map((invoice) => ({
-        type: 'invoice' as const,
-        id: invoice.id,
-        date: this.normalizeDate(invoice.issue_date ?? invoice.created_at.slice(0, 10)),
-        reference: invoice.invoice_number,
-        currency: invoice.currency,
-        amount_minor: invoice.total_minor
-      }))
-      .filter((entry) => this.withinRange(entry.date, from, to));
-
-    const paymentEntries = payments
-      .map((payment) => ({
-        type: 'payment' as const,
-        id: payment.id,
-        date: this.normalizeDate(payment.payment_date),
-        reference: payment.payment_reference,
-        currency: payment.currency,
-        amount_minor: -payment.amount_received_minor
-      }))
-      .filter((entry) => this.withinRange(entry.date, from, to));
-
-    const entries = [...invoiceEntries, ...paymentEntries]
-      .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
-      .map((entry) => {
-        return entry;
-      });
-
-    let runningBalance = openingBalance;
-    const statementEntries = entries.map((entry) => {
-      runningBalance += entry.amount_minor;
-      return {
-        ...entry,
-        running_balance_minor: runningBalance
+      const nextOpen = Math.max(0, Math.min(invoice.total_minor, invoice.open_amount_minor - change.allocated_delta_minor));
+      const next: ReceivableInvoicePosition = {
+        ...invoice,
+        open_amount_minor: nextOpen,
+        paid_amount_minor: Math.max(0, invoice.total_minor - nextOpen),
+        status: nextOpen === 0 ? 'closed' : 'open',
+        updated_at: new Date().toISOString()
       };
-    });
+
+      this.arRepository.upsertInvoice(tenantId, next);
+      this.emitReceivableUpdated(tenantId, next, correlationId);
+    }
+  }
+
+  applyInvoiceVoided(tenantId: string, payload: InvoiceVoidedPayload, correlationId: string | null): void {
+    const invoice = this.arRepository.findInvoice(tenantId, payload.invoice_id);
+    if (!invoice) {
+      return;
+    }
+
+    const next: ReceivableInvoicePosition = {
+      ...invoice,
+      open_amount_minor: 0,
+      paid_amount_minor: 0,
+      status: 'void',
+      updated_at: new Date().toISOString()
+    };
+
+    this.arRepository.upsertInvoice(tenantId, next);
+    this.emitReceivableUpdated(tenantId, next, correlationId);
+  }
+
+  getCustomerFinancialState(tenantId: string, customerId: string): CustomerFinancialState {
+    const invoices = this.arRepository.listInvoicesByCustomer(tenantId, customerId);
+    if (invoices.length === 0) {
+      throw new NotFoundException('Customer financial state not found');
+    }
+
+    const currencyCode = invoices[0].currency_code;
+    const totalOpen = invoices.reduce((sum, item) => sum + item.open_amount_minor, 0);
+    const totalPaid = invoices.reduce((sum, item) => sum + item.paid_amount_minor, 0);
 
     return {
       customer_id: customerId,
-      currency,
-      period: { from, to },
-      opening_balance_minor: openingBalance,
-      closing_balance_minor: runningBalance,
-      entries: statementEntries
+      currency_code: currencyCode,
+      total_open_amount_minor: totalOpen,
+      total_paid_amount_minor: totalPaid,
+      invoice_count_open: invoices.filter((item) => item.status === 'open').length,
+      invoice_count_total: invoices.length,
+      invoices: [...invoices].sort((a, b) => a.issue_date.localeCompare(b.issue_date) || a.invoice_id.localeCompare(b.invoice_id)),
+      updated_at: invoices.map((item) => item.updated_at).sort().at(-1) ?? null
     };
   }
 
-  private resolveAsOfDate(asOf?: string): string {
-    if (!asOf) {
-      return new Date().toISOString().slice(0, 10);
-    }
-
-    return this.parseDateOrNull(asOf, 'as_of') ?? new Date().toISOString().slice(0, 10);
-  }
-
-  private findSingleCurrency(invoices: InvoiceEntity[]): string | null {
-    const currencies = new Set(invoices.map((invoice) => invoice.currency));
-    if (currencies.size === 0) {
-      return null;
-    }
-
-    if (currencies.size > 1) {
-      throw new NotFoundException('Multi-currency customer balances are not supported by this endpoint');
-    }
-
-    return invoices[0].currency;
-  }
-
-  private daysPastDue(invoice: InvoiceEntity, asOfDate: string): number {
-    if (!invoice.due_date) {
-      return 0;
-    }
-
-    const dueDate = new Date(`${invoice.due_date}T00:00:00.000Z`);
-    const asOf = new Date(`${asOfDate}T00:00:00.000Z`);
-    return Math.floor((asOf.getTime() - dueDate.getTime()) / 86_400_000);
-  }
-
-  private parseDateOrNull(value: string | undefined, field: string): string | null {
-    if (!value) {
-      return null;
-    }
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      throw new BadRequestException(`${field} must be a valid ISO date (YYYY-MM-DD)`);
-    }
-
-    const date = new Date(`${value}T00:00:00.000Z`);
-    if (Number.isNaN(date.getTime())) {
-      throw new BadRequestException(`${field} must be a valid ISO date (YYYY-MM-DD)`);
-    }
-
-    return value;
-  }
-
-  private normalizeDate(value: string): string {
-    return value.slice(0, 10);
-  }
-
-  private withinRange(date: string, from: string | null, to: string | null): boolean {
-    if (from && date < from) {
-      return false;
-    }
-
-    if (to && date > to) {
-      return false;
-    }
-
-    return true;
+  private emitReceivableUpdated(tenantId: string, position: ReceivableInvoicePosition, correlationId: string | null): void {
+    this.eventsService.logEvent({
+      tenant_id: tenantId,
+      type: 'subledger.receivable.updated.v1',
+      aggregate_type: 'receivable_position',
+      aggregate_id: position.invoice_id,
+      aggregate_version: 1,
+      correlation_id: correlationId,
+      idempotency_key: `subledger.receivable.updated.v1:${position.invoice_id}:${position.updated_at}:${position.open_amount_minor}`,
+      payload: {
+        receivable_position_id: position.invoice_id,
+        customer_id: position.customer_id,
+        open_amount_minor: position.open_amount_minor,
+        currency_code: position.currency_code
+      }
+    });
   }
 }

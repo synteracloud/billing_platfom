@@ -1,6 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { CustomersService } from '../customers/customers.service';
-import { EventsService } from '../events/events.service';
 import { CreateInvoiceDto } from '../invoices/dto/create-invoice.dto';
 import { InvoicesService } from '../invoices/invoices.service';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
@@ -13,8 +12,7 @@ export class SubscriptionsService {
   constructor(
     private readonly subscriptionsRepository: SubscriptionsRepository,
     private readonly customersService: CustomersService,
-    private readonly invoicesService: InvoicesService,
-    private readonly eventsService: EventsService
+    private readonly invoicesService: InvoicesService
   ) {}
 
   listSubscriptions(tenantId: string): SubscriptionEntity[] {
@@ -38,20 +36,6 @@ export class SubscriptionsService {
       pricing_terms: data.pricing_terms,
       canceled_at: null,
       metadata: data.metadata ?? null
-    });
-
-    this.eventsService.logEvent({
-      tenant_id: tenantId,
-      type: 'subledger.receivable.updated.v1',
-      aggregate_type: 'receivable_position',
-      aggregate_id: created.id,
-      aggregate_version: 1,
-      payload: {
-        receivable_position_id: created.id,
-        customer_id: created.customer_id,
-        open_amount_minor: 0,
-        currency_code: String(created.pricing_terms.currency ?? 'USD')
-      }
     });
 
     return created;
@@ -95,19 +79,7 @@ export class SubscriptionsService {
       end_date: subscription.end_date ?? now.slice(0, 10)
     });
 
-    this.eventsService.logEvent({
-      tenant_id: tenantId,
-      type: 'subledger.receivable.updated.v1',
-      aggregate_type: 'receivable_position',
-      aggregate_id: id,
-      aggregate_version: 2,
-      payload: {
-        receivable_position_id: id,
-        customer_id: subscription.customer_id,
-        open_amount_minor: 0,
-        currency_code: String(subscription.pricing_terms.currency ?? 'USD')
-      }
-    });
+
 
     return updated!;
   }

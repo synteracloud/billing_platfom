@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
-import { CustomersModule } from '../customers/customers.module';
-import { InvoicesModule } from '../invoices/invoices.module';
-import { PaymentsModule } from '../payments/payments.module';
+import { EventsModule } from '../events/events.module';
+import { EventQueueModule } from '../events/queue/event-queue.module';
 import { ArController } from './ar.controller';
-import { ArReadOnlyGuard } from './ar-readonly.guard';
+import { ArEventsHandler } from './ar.events.handler';
+import { ArRepository } from './ar.repository';
 import { ArService } from './ar.service';
 
 @Module({
-  imports: [CustomersModule, InvoicesModule, PaymentsModule],
+  imports: [EventsModule, EventQueueModule],
   controllers: [ArController],
-  providers: [ArService, ArReadOnlyGuard],
+  providers: [ArService, ArRepository, ArEventsHandler],
   exports: [ArService]
 })
 export class ArModule {}
