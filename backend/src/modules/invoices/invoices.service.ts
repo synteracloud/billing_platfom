@@ -3,6 +3,7 @@ import { FinancialStateValidator } from '../../common/transactions/financial-sta
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { CustomersService } from '../customers/customers.service';
 import { EventsService } from '../events/events.service';
+import { PaymentAllocationChange } from '../events/entities/event.entity';
 import { AddLineDto } from './dto/add-line.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
@@ -296,6 +297,18 @@ export class InvoicesService {
     }, this.financialParticipants());
   }
 
+  reconcilePaymentAllocations(tenantId: string, allocationChanges: PaymentAllocationChange[], correlationId: string): void {
+    const touchedInvoiceIds = new Set(
+      allocationChanges
+        .map((change) => change.invoice_id)
+        .filter((invoiceId): invoiceId is string => typeof invoiceId === 'string' && invoiceId.trim().length > 0)
+    );
+
+    for (const invoiceId of touchedInvoiceIds) {
+      this.reconcileInvoicePaymentState(tenantId, invoiceId, correlationId);
+    }
+  }
+
   private financialParticipants(): TransactionParticipant[] {
     return [
       {
@@ -353,6 +366,59 @@ export class InvoicesService {
     });
 
     return this.getInvoice(tenantId, invoiceId);
+  }
+
+  private reconcileInvoicePaymentState(tenantId: string, invoiceId: string, correlationId: string): void {
+    const invoice = this.invoicesRepository.findById(tenantId, invoiceId);
+    if (!invoice || invoice.status === 'void' || invoice.status === 'draft') {
+      return;
+    }
+
+    const allocatedMinor = this.calculateNetAllocatedMinor(tenantId, invoiceId);
+    const paidMinor = Math.min(Math.max(0, allocatedMinor), invoice.total_minor);
+    const dueMinor = Math.max(0, invoice.total_minor - paidMinor);
+    const nextStatus: InvoiceEntity['status'] = dueMinor === 0 ? 'paid' : paidMinor > 0 ? 'partially_paid' : 'issued';
+
+    if (invoice.status === nextStatus && invoice.amount_paid_minor === paidMinor && invoice.amount_due_minor === dueMinor) {
+      return;
+    }
+
+    const updated = this.invoicesRepository.update(tenantId, invoiceId, {
+      status: nextStatus,
+      amount_paid_minor: paidMinor,
+      amount_due_minor: dueMinor
+    });
+
+    if (!updated) {
+      throw new NotFoundException(`Invoice not found: ${invoiceId}`);
+    }
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'invoice',
+      entity_id: invoiceId,
+      action: 'payment_state_reconciled',
+      aggregate_version: nextStatus === 'issued' ? 2 : 3,
+      correlation_id: correlationId,
+      payload: { before: invoice, after: updated }
+    });
+  }
+
+  private calculateNetAllocatedMinor(tenantId: string, invoiceId: string): number {
+    const paymentEvents = [
+      ...this.eventsService.listEvents(tenantId, { event_type: 'billing.payment.allocated.v1' }),
+      ...this.eventsService.listEvents(tenantId, { event_type: 'billing.payment.refunded.v1' })
+    ];
+
+    return paymentEvents.reduce((sum, event) => {
+      const payload = event.payload as { allocation_changes?: PaymentAllocationChange[] };
+      const allocationChanges = Array.isArray(payload.allocation_changes) ? payload.allocation_changes : [];
+      const invoiceDelta = allocationChanges
+        .filter((change) => change.invoice_id === invoiceId)
+        .reduce((innerSum, change) => innerSum + change.allocated_delta_minor, 0);
+
+      return sum + invoiceDelta;
+    }, 0);
   }
 
   private ensureCustomerExists(tenantId: string, customerId: string): void {

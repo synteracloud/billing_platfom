@@ -92,6 +92,7 @@ export type PaymentAllocatedPayload = {
   allocation_count: number;
   total_allocated_minor: number;
   currency_code: string;
+  allocation_changes: PaymentAllocationChange[];
 };
 
 export type PaymentRefundedPayload = {
@@ -99,6 +100,12 @@ export type PaymentRefundedPayload = {
   refunded_at: string;
   amount_minor: number;
   currency_code: string;
+  allocation_changes: PaymentAllocationChange[];
+};
+
+export type PaymentAllocationChange = {
+  invoice_id: string;
+  allocated_delta_minor: number;
 };
 
 export type JournalPostedPayload = {

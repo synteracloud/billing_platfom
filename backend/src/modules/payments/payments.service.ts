@@ -260,7 +260,11 @@ export class PaymentsService {
           payment_id: paymentId,
           refunded_at: new Date().toISOString(),
           amount_minor: payment.amount_received_minor,
-          currency_code: payment.currency
+          currency_code: payment.currency,
+          allocation_changes: removedAllocations.map((allocation) => ({
+            invoice_id: allocation.invoice_id,
+            allocated_delta_minor: -allocation.allocated_minor
+          }))
         }
       });
 
