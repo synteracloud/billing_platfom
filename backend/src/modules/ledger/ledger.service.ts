@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
 import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
-import { BillCreatedPayload, DomainEvent, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
+import { BillCreatedPayload, BillPaidPayload, DomainEvent, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
@@ -418,8 +418,25 @@ export class LedgerService {
         };
       }
       case 'billing.bill.approved.v1':
-      case 'billing.bill.paid.v1':
         throw new BadRequestException(`Automatic posting for ${eventType} is not yet implemented`);
+      case 'billing.bill.paid.v1': {
+        const payload = event.payload as BillPaidPayload;
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'bill',
+          source_id: payload.bill_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: payload.paid_at.slice(0, 10),
+          currency_code: payload.currency_code,
+          description: `Bill paid ${payload.bill_id}`,
+          entries: [
+            this.createPostingLine('2000', 'Accounts Payable', 'debit', payload.amount_paid_minor, payload.currency_code),
+            this.createPostingLine('1000', 'Cash', 'credit', payload.amount_paid_minor, payload.currency_code)
+          ]
+        };
+      }
       case 'billing.bill.created.v1': {
         const payload = event.payload as BillCreatedPayload;
         return {

@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
+import { FinancialTransactionManager } from '../../common/transactions/financial-transaction.manager';
 import { EventConsumerIdempotencyService } from '../idempotency/event-consumer-idempotency.service';
 import { QueryEventsDto } from './dto/query-events.dto';
 import {
@@ -36,7 +37,8 @@ export class EventsService {
   constructor(
     private readonly eventsRepository: EventsRepository,
     private readonly eventConsumerIdempotencyService: EventConsumerIdempotencyService,
-    private readonly eventQueuePublisher: EventQueuePublisher
+    private readonly eventQueuePublisher: EventQueuePublisher,
+    @Optional() private readonly transactionManager?: FinancialTransactionManager
   ) {}
 
   listEvents(tenantId: string, query: QueryEventsDto): DomainEvent[] {
@@ -59,9 +61,15 @@ export class EventsService {
 
     validateDomainEvent(event);
     const storedEvent = this.eventsRepository.create(event) as DomainEvent<TEventType>;
-    void this.eventQueuePublisher.publish(storedEvent).catch((error: Error) => {
+    const publishAfterCommit = () => this.eventQueuePublisher.publish(storedEvent).catch((error: Error) => {
       this.logger.error(`Failed to enqueue domain event ${storedEvent.id}: ${error.message}`);
     });
+
+    if (this.transactionManager?.hasActiveTransaction()) {
+      this.transactionManager.runAfterCommit(() => publishAfterCommit());
+    } else {
+      void publishAfterCommit();
+    }
     return storedEvent;
   }
 

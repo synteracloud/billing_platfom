@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { EventBusService } = require('../.tmp-test-dist/modules/events/event-bus.service');
 const { EventsService } = require('../.tmp-test-dist/modules/events/events.service');
 const { EventsRepository } = require('../.tmp-test-dist/modules/events/events.repository');
+const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
 const { EventConsumerIdempotencyService } = require('../.tmp-test-dist/modules/idempotency/event-consumer-idempotency.service');
 const { IdempotencyRepository } = require('../.tmp-test-dist/modules/idempotency/idempotency.repository');
 const { IdempotencyService } = require('../.tmp-test-dist/modules/idempotency/idempotency.service');
@@ -13,9 +14,10 @@ function createEventsService() {
   const idempotencyService = new IdempotencyService(idempotencyRepository);
   const eventConsumerIdempotencyService = new EventConsumerIdempotencyService(idempotencyService);
   const eventBusService = new EventBusService(eventsRepository, eventConsumerIdempotencyService);
-  const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService);
+  const transactionManager = new FinancialTransactionManager();
+  const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService, transactionManager);
 
-  return { eventsService, eventsRepository, eventBusService };
+  return { eventsService, eventsRepository, eventBusService, transactionManager };
 }
 
 test('publishes invoice events to multiple sync and async consumers without coupling', async () => {
@@ -37,13 +39,14 @@ test('publishes invoice events to multiple sync and async consumers without coup
     aggregate_type: 'invoice',
     aggregate_id: 'invoice-1',
     aggregate_version: 1,
-    payload: {
-      invoice_id: 'invoice-1',
-      issue_date: '2025-02-01',
-      due_date: '2025-02-10',
-      total_minor: 1250,
-      currency_code: 'USD'
-    }
+      payload: {
+        invoice_id: 'invoice-1',
+        customer_id: 'customer-1',
+        issue_date: '2025-02-01',
+        due_date: '2025-02-10',
+        total_minor: 1250,
+        currency_code: 'USD'
+      }
   });
 
   await Promise.all([first.waitForIdle(), second.waitForIdle()]);
@@ -166,4 +169,54 @@ test('records complete audit events and deduplicates duplicate audit mutations',
   assert.equal(first.payload.entity.id, 'invoice-99');
   assert.ok(first.payload.timestamp);
   assert.equal(first.payload.actor.id, 'user-42');
+});
+
+test('emits bill.created and bill.paid only after commit with canonical payloads', async () => {
+  const { eventsService, eventBusService, transactionManager } = createEventsService();
+  const delivered = [];
+  const subscription = eventBusService.subscribe('billing.bill.created.v1', (event) => {
+    delivered.push(event.type);
+    assert.equal(event.payload.bill_id, 'bill-1');
+    assert.equal(event.payload.currency_code, 'USD');
+  });
+  const paidSubscription = eventBusService.subscribe('billing.bill.paid.v1', (event) => {
+    delivered.push(event.type);
+    assert.equal(event.payload.bill_id, 'bill-1');
+    assert.equal(event.payload.amount_paid_minor, 2500);
+    assert.equal(event.payload.currency_code, 'USD');
+  });
+
+  await transactionManager.wrapper(async () => {
+    eventsService.logEvent({
+      type: 'billing.bill.created.v1',
+      tenant_id: 'tenant-1',
+      aggregate_type: 'bill',
+      aggregate_id: 'bill-1',
+      aggregate_version: 1,
+      payload: {
+        bill_id: 'bill-1',
+        created_at: '2025-02-01T00:00:00.000Z',
+        total_minor: 2500,
+        currency_code: 'USD',
+        expense_classification: 'operating'
+      }
+    });
+    eventsService.logEvent({
+      type: 'billing.bill.paid.v1',
+      tenant_id: 'tenant-1',
+      aggregate_type: 'bill',
+      aggregate_id: 'bill-1',
+      aggregate_version: 2,
+      payload: {
+        bill_id: 'bill-1',
+        paid_at: '2025-02-02T00:00:00.000Z',
+        amount_paid_minor: 2500,
+        currency_code: 'USD'
+      }
+    });
+    assert.equal(delivered.length, 0);
+  }, []);
+
+  await Promise.all([subscription.waitForIdle(), paidSubscription.waitForIdle()]);
+  assert.deepEqual(delivered, ['billing.bill.created.v1', 'billing.bill.paid.v1']);
 });
