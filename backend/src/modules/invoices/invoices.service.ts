@@ -7,7 +7,7 @@ import { AddLineDto } from './dto/add-line.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceLineEntity } from './entities/invoice-line.entity';
-import { InvoiceEntity } from './entities/invoice.entity';
+import { canTransitionInvoiceStatus, InvoiceEntity, InvoiceStatus } from './entities/invoice.entity';
 import { InvoicesRepository } from './invoices.repository';
 
 @Injectable()
@@ -130,9 +130,7 @@ export class InvoicesService {
     return this.transactionManager.wrapper(async () => {
       const invoice = this.getInvoice(tenantId, invoiceId);
 
-      if (invoice.status !== 'draft') {
-        throw new ConflictException('Only draft invoices can be issued');
-      }
+      this.assertValidStatusTransition(invoice.status, 'issued');
 
       if (invoice.lines.length === 0) {
         throw new ConflictException('Invoice must have at least one line before issuing');
@@ -189,13 +187,7 @@ export class InvoicesService {
     return this.transactionManager.wrapper(async () => {
       const invoice = this.getInvoice(tenantId, invoiceId);
 
-      if (invoice.status === 'paid' || invoice.status === 'partially_paid') {
-        throw new ConflictException('Settled invoices cannot be voided');
-      }
-
-      if (invoice.status === 'void') {
-        throw new ConflictException('Invoice is already void');
-      }
+      this.assertValidStatusTransition(invoice.status, 'void');
 
       const voidedAt = new Date().toISOString();
       const updated = this.invoicesRepository.update(tenantId, invoiceId, {
@@ -396,5 +388,11 @@ export class InvoicesService {
   private generateInvoiceNumber(tenantId: string): string {
     const sequence = this.invoicesRepository.countByTenant(tenantId) + 1;
     return `INV-${sequence.toString().padStart(6, '0')}`;
+  }
+
+  private assertValidStatusTransition(from: InvoiceStatus, to: InvoiceStatus): void {
+    if (!canTransitionInvoiceStatus(from, to)) {
+      throw new ConflictException(`Invalid invoice status transition: ${from} -> ${to}`);
+    }
   }
 }

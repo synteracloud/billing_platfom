@@ -1,4 +1,19 @@
-export type InvoiceStatus = 'draft' | 'issued' | 'partially_paid' | 'paid' | 'void';
+export type InvoiceStatus = 'draft' | 'issued' | 'paid' | 'void';
+
+export const INVOICE_LIFECYCLE_TRANSITIONS: Record<InvoiceStatus, readonly InvoiceStatus[]> = {
+  draft: ['issued', 'void'],
+  issued: ['paid', 'void'],
+  paid: ['issued'],
+  void: []
+} as const;
+
+export function canTransitionInvoiceStatus(from: InvoiceStatus, to: InvoiceStatus): boolean {
+  if (from === to) {
+    return true;
+  }
+
+  return INVOICE_LIFECYCLE_TRANSITIONS[from].includes(to);
+}
 
 export interface InvoiceEntity {
   id: string;
