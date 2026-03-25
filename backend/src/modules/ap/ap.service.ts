@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { EventsService } from '../events/events.service';
+import { LedgerRepository } from '../ledger/ledger.repository';
 import { ApRepository, PayableBillPosition, VendorPayableState } from './ap.repository';
 
 export type BillApprovedPayload = {
@@ -17,14 +18,45 @@ export type BillPaidPayload = {
   amount_paid_minor: number;
 };
 
+export interface VendorDueTrackingState {
+  vendor_id: string;
+  as_of_date: string;
+  overdue_amount_minor: number;
+  due_amount_minor: number;
+  unknown_due_date_amount_minor: number;
+  overdue_bill_count: number;
+  due_bill_count: number;
+  unknown_due_date_bill_count: number;
+}
+
+export interface ApLedgerReconciliation {
+  total_open_amount_minor: number;
+  ledger_ap_amount_minor: number;
+  variance_minor: number;
+}
+
 @Injectable()
 export class ApService {
   constructor(
     private readonly apRepository: ApRepository,
-    private readonly eventsService: EventsService
+    private readonly eventsService: EventsService,
+    private readonly ledgerRepository: LedgerRepository = { listEntries: () => [] } as LedgerRepository
   ) {}
 
   applyBillApproved(tenantId: string, payload: BillApprovedPayload, correlationId: string | null): void {
+    this.applyBillApprovedFromEvent(tenantId, payload, correlationId, `bill-approved:${payload.bill_id}:${payload.approved_at}`);
+  }
+
+  applyBillApprovedFromEvent(
+    tenantId: string,
+    payload: BillApprovedPayload,
+    correlationId: string | null,
+    eventId: string
+  ): void {
+    if (!this.apRepository.markEventApplied(tenantId, 'bill-approved', eventId)) {
+      return;
+    }
+
     const now = new Date().toISOString();
     const previous = this.apRepository.findBill(tenantId, payload.bill_id);
     const baseOpenAmount = previous ? previous.open_amount_minor : payload.total_minor;
@@ -47,6 +79,14 @@ export class ApService {
   }
 
   applyBillPaid(tenantId: string, payload: BillPaidPayload, correlationId: string | null): void {
+    this.applyBillPaidFromEvent(tenantId, payload, correlationId, `bill-paid:${payload.bill_id}:${payload.paid_at}:${payload.amount_paid_minor}`);
+  }
+
+  applyBillPaidFromEvent(tenantId: string, payload: BillPaidPayload, correlationId: string | null, eventId: string): void {
+    if (!this.apRepository.markEventApplied(tenantId, 'bill-paid', eventId)) {
+      return;
+    }
+
     const bill = this.apRepository.findBill(tenantId, payload.bill_id);
     if (!bill || bill.status === 'void') {
       return;
@@ -81,6 +121,71 @@ export class ApService {
       bill_count_total: bills.length,
       bills: [...bills].sort((a, b) => a.approved_at.localeCompare(b.approved_at) || a.bill_id.localeCompare(b.bill_id)),
       updated_at: bills.map((item) => item.updated_at).sort().at(-1) ?? null
+    };
+  }
+
+  getVendorDueTrackingState(tenantId: string, vendorId: string, asOfDate: string): VendorDueTrackingState {
+    const bills = this.apRepository
+      .listBillsByVendor(tenantId, vendorId)
+      .filter((bill) => bill.status === 'open' && bill.open_amount_minor > 0);
+
+    const normalizedDate = asOfDate.slice(0, 10);
+    let overdueAmount = 0;
+    let dueAmount = 0;
+    let unknownAmount = 0;
+    let overdueCount = 0;
+    let dueCount = 0;
+    let unknownCount = 0;
+
+    for (const bill of bills) {
+      if (!bill.due_date) {
+        unknownAmount += bill.open_amount_minor;
+        unknownCount += 1;
+        continue;
+      }
+
+      if (bill.due_date < normalizedDate) {
+        overdueAmount += bill.open_amount_minor;
+        overdueCount += 1;
+        continue;
+      }
+
+      dueAmount += bill.open_amount_minor;
+      dueCount += 1;
+    }
+
+    return {
+      vendor_id: vendorId,
+      as_of_date: normalizedDate,
+      overdue_amount_minor: overdueAmount,
+      due_amount_minor: dueAmount,
+      unknown_due_date_amount_minor: unknownAmount,
+      overdue_bill_count: overdueCount,
+      due_bill_count: dueCount,
+      unknown_due_date_bill_count: unknownCount
+    };
+  }
+
+  reconcileOpenPayablesToLedger(tenantId: string): ApLedgerReconciliation {
+    const totalOpenAmount = this.apRepository
+      .listBills(tenantId)
+      .filter((bill) => bill.status === 'open')
+      .reduce((sum, bill) => sum + bill.open_amount_minor, 0);
+
+    const ledgerApAmount = this.ledgerRepository.listEntries(tenantId).reduce((entrySum, entry) => {
+      return entrySum + entry.lines.reduce((lineSum, line) => {
+        if (line.account_code !== '2000') {
+          return lineSum;
+        }
+
+        return lineSum + (line.direction === 'credit' ? line.amount_minor : -line.amount_minor);
+      }, 0);
+    }, 0);
+
+    return {
+      total_open_amount_minor: totalOpenAmount,
+      ledger_ap_amount_minor: ledgerApAmount,
+      variance_minor: totalOpenAmount - ledgerApAmount
     };
   }
 

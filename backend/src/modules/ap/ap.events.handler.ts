@@ -12,11 +12,16 @@ export class ApEventsHandler implements OnApplicationBootstrap {
 
   onApplicationBootstrap(): void {
     this.eventProcessingRegistry.register('billing.bill.approved.v1', 'ap-payable-approved-projection', async (event) => {
-      this.apService.applyBillApproved(event.tenant_id, event.payload as BillApprovedPayload, event.correlation_id);
+      this.apService.applyBillApprovedFromEvent(
+        event.tenant_id,
+        event.payload as BillApprovedPayload,
+        event.correlation_id,
+        event.event_id
+      );
     });
 
     this.eventProcessingRegistry.register('billing.bill.paid.v1', 'ap-payable-payment-projection', async (event) => {
-      this.apService.applyBillPaid(event.tenant_id, event.payload as BillPaidPayload, event.correlation_id);
+      this.apService.applyBillPaidFromEvent(event.tenant_id, event.payload as BillPaidPayload, event.correlation_id, event.event_id);
     });
 
     this.eventProcessingRegistry.register('billing.bill.created.v1', 'ap-payable-created-projection', async (event) => {
@@ -29,7 +34,7 @@ export class ApEventsHandler implements OnApplicationBootstrap {
         currency_code: string;
       };
 
-      this.apService.applyBillApproved(
+      this.apService.applyBillApprovedFromEvent(
         event.tenant_id,
         {
           bill_id: payload.bill_id,
@@ -39,7 +44,8 @@ export class ApEventsHandler implements OnApplicationBootstrap {
           total_minor: payload.total_minor,
           currency_code: payload.currency_code
         },
-        event.correlation_id
+        event.correlation_id,
+        event.event_id
       );
     });
   }
