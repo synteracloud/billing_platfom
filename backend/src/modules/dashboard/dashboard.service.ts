@@ -3,6 +3,7 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentsService } from '../payments/payments.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { InvoiceEntity } from '../invoices/entities/invoice.entity';
+import { LedgerRepository } from '../ledger/ledger.repository';
 
 export interface AgingBuckets {
   current: number;
@@ -121,12 +122,66 @@ export function buildInvoiceAgingBuckets(invoices: Array<Pick<InvoiceEntity, 'st
   );
 }
 
+
+export interface RunwayAnalyticsInput {
+  current_cash_minor: number;
+  inflows_minor: number;
+  outflows_minor: number;
+}
+
+export interface RunwayAnalyticsResult extends RunwayAnalyticsInput {
+  net_burn_minor: number;
+  runway_days: number | null;
+}
+
+export function computeCurrentCashMinor(ledgerEntries: Array<{ lines: Array<{ account_code: string; direction: 'debit' | 'credit'; amount_minor: number }> }>): number {
+  return ledgerEntries.reduce((entrySum, entry) => {
+    return entrySum + entry.lines.reduce((lineSum, line) => {
+      if (line.account_code !== '1000') {
+        return lineSum;
+      }
+
+      return lineSum + (line.direction === 'debit' ? line.amount_minor : -line.amount_minor);
+    }, 0);
+  }, 0);
+}
+
+export function computeNetBurnMinor(inflowsMinor: number, outflowsMinor: number): number {
+  return outflowsMinor - inflowsMinor;
+}
+
+export function computeRunwayAnalytics(input: RunwayAnalyticsInput): RunwayAnalyticsResult {
+  const currentCashMinor = Math.max(0, input.current_cash_minor);
+  const inflowsMinor = Math.max(0, input.inflows_minor);
+  const outflowsMinor = Math.max(0, input.outflows_minor);
+  const netBurnMinor = computeNetBurnMinor(inflowsMinor, outflowsMinor);
+
+  if (currentCashMinor === 0 || netBurnMinor <= 0) {
+    return {
+      current_cash_minor: currentCashMinor,
+      inflows_minor: inflowsMinor,
+      outflows_minor: outflowsMinor,
+      net_burn_minor: netBurnMinor,
+      runway_days: null,
+    };
+  }
+
+  return {
+    current_cash_minor: currentCashMinor,
+    inflows_minor: inflowsMinor,
+    outflows_minor: outflowsMinor,
+    net_burn_minor: netBurnMinor,
+    runway_days: Number((currentCashMinor / netBurnMinor).toFixed(2)),
+  };
+}
+
 @Injectable()
 export class DashboardService {
   constructor(
     private readonly invoicesService: InvoicesService,
     private readonly paymentsService: PaymentsService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly ledgerRepository: LedgerRepository,
   ) {}
 
   getMetrics(tenantId: string): {
@@ -135,6 +190,11 @@ export class DashboardService {
         revenue_today: number;
         outstanding_balance: number;
         invoices_due: number;
+        runway_days: number | null;
+        net_burn_minor: number;
+        current_cash_minor: number;
+        inflows_minor: number;
+        outflows_minor: number;
       };
       aging: AgingBuckets;
       active_subscriptions: number;
@@ -158,12 +218,26 @@ export class DashboardService {
     const activeSubscriptions = subscriptions.filter((subscription) => subscription.status === 'active').length;
     const aging = buildInvoiceAgingBuckets(invoices, today);
 
+    const currentCashMinor = computeCurrentCashMinor(this.ledgerRepository.listEntries(tenantId));
+    const inflowsMinor = payments.reduce((sum, payment) => sum + Math.max(0, payment.amount_received_minor), 0);
+    const outflowsMinor = this.computeOutflowsMinor(tenantId);
+    const runway = computeRunwayAnalytics({
+      current_cash_minor: currentCashMinor,
+      inflows_minor: inflowsMinor,
+      outflows_minor: outflowsMinor,
+    });
+
     return {
       dashboard: {
         metrics: {
           revenue_today: revenueToday,
           outstanding_balance: outstandingBalance,
           invoices_due: invoicesDue,
+          runway_days: runway.runway_days,
+          net_burn_minor: runway.net_burn_minor,
+          current_cash_minor: runway.current_cash_minor,
+          inflows_minor: runway.inflows_minor,
+          outflows_minor: runway.outflows_minor,
         },
         aging,
         active_subscriptions: activeSubscriptions,
@@ -185,4 +259,23 @@ export class DashboardService {
       },
     };
   }
+
+  private computeOutflowsMinor(tenantId: string): number {
+    const billPaymentOutflows = this.ledgerRepository.listEntries(tenantId).reduce((sum, entry) => {
+      if (entry.source_type !== 'bill') {
+        return sum;
+      }
+
+      return sum + entry.lines.reduce((lineSum, line) => {
+        if (line.account_code !== '1000' || line.direction !== 'credit') {
+          return lineSum;
+        }
+
+        return lineSum + line.amount_minor;
+      }, 0);
+    }, 0);
+
+    return Math.max(0, billPaymentOutflows);
+  }
+
 }
