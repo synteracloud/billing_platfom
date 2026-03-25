@@ -6,11 +6,12 @@ import { InvoicesModule } from '../invoices/invoices.module';
 import { PaymentsController } from './payments.controller';
 import { PaymentsRepository } from './payments.repository';
 import { PaymentsService } from './payments.service';
+import { StripeConnector } from './connectors/stripe/stripe.connector';
 
 @Module({
   imports: [CustomersModule, InvoicesModule, EventsModule, IdempotencyModule],
   controllers: [PaymentsController],
-  providers: [PaymentsService, PaymentsRepository],
-  exports: [PaymentsService, PaymentsRepository]
+  providers: [PaymentsService, PaymentsRepository, StripeConnector],
+  exports: [PaymentsService, PaymentsRepository, StripeConnector]
 })
 export class PaymentsModule {}
