@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Query, Req } from '@nestjs/common';
 import { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface';
 import { CreateManualMatchDto } from './dto/create-manual-match.dto';
+import { CreateReconciliationSuggestionsDto } from './dto/reconciliation-suggestions.dto';
 import { ReconciliationService } from './reconciliation.service';
 
 @Controller('api/v1/reconciliation')
@@ -25,5 +26,15 @@ export class ReconciliationController {
   @Post('matches/manual')
   createManualMatch(@Req() request: AuthenticatedRequest, @Body() body: CreateManualMatchDto) {
     return this.reconciliationService.createManualMatch(request.tenant.id, body);
+  }
+
+  @Post('suggestions')
+  suggestMatches(@Req() request: AuthenticatedRequest, @Body() body: CreateReconciliationSuggestionsDto) {
+    const tenantScopedBody: CreateReconciliationSuggestionsDto = {
+      unmatched_transactions: body.unmatched_transactions.map((item) => ({ ...item, tenant_id: request.tenant.id })),
+      matching_candidates: body.matching_candidates.map((item) => ({ ...item, tenant_id: request.tenant.id }))
+    };
+
+    return this.reconciliationService.suggestMatches(tenantScopedBody);
   }
 }
