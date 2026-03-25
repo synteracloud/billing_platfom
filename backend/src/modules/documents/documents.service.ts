@@ -95,16 +95,17 @@ export class DocumentsService {
 
     this.eventsService.logEvent({
       tenant_id: tenantId,
-      type: 'integration.record.normalized.v1',
-      aggregate_type: 'normalized_record',
+      type: 'billing.invoice.sent.v1',
+      aggregate_type: 'invoice',
       aggregate_id: invoiceId,
       aggregate_version: 2,
+      correlation_id: invoiceId,
       payload: {
-        normalized_record_id: invoiceId,
-        source_system: 'email',
-        source_record_id: targetEmail,
-        canonical_entity: 'invoice',
-        amount_minor: invoice.total_minor,
+        invoice_id: invoiceId,
+        customer_id: invoice.customer_id,
+        to_email: targetEmail,
+        sent_at: response.sent_at,
+        total_minor: invoice.total_minor,
         currency_code: invoice.currency
       }
     });
