@@ -4,23 +4,23 @@ import { QueueEnvelope } from '../events/queue/event-queue.types';
 import { LedgerService } from './ledger.service';
 
 @Injectable()
-export class BillCreatedLedgerConsumer implements OnApplicationBootstrap {
+export class PaymentReceivedLedgerConsumer implements OnApplicationBootstrap {
   constructor(
     private readonly eventProcessingRegistry: EventProcessingRegistry,
     private readonly ledgerService: LedgerService
   ) {}
 
   onApplicationBootstrap(): void {
-    this.eventProcessingRegistry.register('billing.bill.created.v1', 'ledger-posting', async (event) => {
-      await this.handle(event);
+    this.eventProcessingRegistry.register('billing.payment.recorded.v1', 'ledger-cash-receipt-posting', async (event) => {
+      await this.postPaymentReceivedEvent(event);
     });
   }
 
-  private async handle(event: QueueEnvelope): Promise<void> {
+  private async postPaymentReceivedEvent(event: QueueEnvelope): Promise<void> {
     await this.ledgerService.postEvent(
       event.tenant_id,
       event.event_id,
-      `ledger:bill-created:${event.event_id}`,
+      `ledger:payment-received:${event.event_id}`,
       '1'
     );
   }

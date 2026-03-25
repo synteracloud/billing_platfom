@@ -52,7 +52,7 @@ test('posts a balanced invoice journal with deterministic idempotent output', as
   assert.equal(first.id, second.id);
   assert.deepEqual(first, second);
   assert.equal(first.lines.length, 3);
-  assert.equal(eventsRepository.listByTenant('tenant-1', {}).length, 1);
+  assert.equal(eventsRepository.listByTenant('tenant-1', {}).length, 2);
   assert.throws(() => { first.lines.push({}); }, /read only|object is not extensible|Cannot add property/);
 });
 
@@ -298,6 +298,45 @@ test('posts bill.created to expense and accounts payable idempotently', async ()
     [
       ['5000', 'debit', 3100],
       ['2000', 'credit', 3100]
+    ]
+  );
+});
+
+test('posts payment.received (recorded) to cash and unallocated cash idempotently', async () => {
+  const { ledgerService, eventsRepository } = createLedgerService();
+
+  const paymentRecordedEvent = eventsRepository.create({
+    id: 'evt-payment-recorded-1',
+    type: 'billing.payment.recorded.v1',
+    version: 1,
+    tenant_id: 'tenant-1',
+    payload: {
+      payment_id: 'payment-recorded-1',
+      customer_id: 'customer-1',
+      amount_minor: 1800,
+      currency_code: 'USD',
+      status: 'recorded'
+    },
+    occurred_at: '2025-01-22T00:00:00.000Z',
+    recorded_at: '2025-01-22T00:00:00.000Z',
+    aggregate_type: 'payment',
+    aggregate_id: 'payment-recorded-1',
+    aggregate_version: 1,
+    causation_id: null,
+    correlation_id: null,
+    idempotency_key: 'payment-recorded-1',
+    producer: 'test'
+  });
+
+  const first = await ledgerService.postEvent('tenant-1', paymentRecordedEvent.id, 'payment-recorded-retry-1', '2025-01-01');
+  const retry = await ledgerService.postEvent('tenant-1', paymentRecordedEvent.id, 'payment-recorded-retry-2', '2025-01-01');
+
+  assert.equal(first.id, retry.id);
+  assert.deepEqual(
+    first.lines.map((line) => [line.account_code, line.direction, line.amount_minor]),
+    [
+      ['1000', 'debit', 1800],
+      ['2200', 'credit', 1800]
     ]
   );
 });
