@@ -43,6 +43,8 @@ const payloadValidators: {
   },
   'billing.payment.allocated.v1': (payload) => {
     requireString(payload.payment_id, 'payload.payment_id');
+    requireString(payload.customer_id, 'payload.customer_id');
+    requireNumber(payload.amount_minor, 'payload.amount_minor');
     requireNumber(payload.allocation_count, 'payload.allocation_count');
     requireNumber(payload.total_allocated_minor, 'payload.total_allocated_minor');
     requireString(payload.currency_code, 'payload.currency_code');

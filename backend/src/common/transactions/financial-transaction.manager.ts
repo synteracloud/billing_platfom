@@ -15,6 +15,7 @@ type TransactionContext = {
   depth: number;
   snapshots: Map<string, { restore: (snapshot: Snapshot) => void; value: Snapshot }>;
   validators: Map<string, () => void>;
+  afterCommitCallbacks: Array<() => void | Promise<void>>;
   rolledBack: boolean;
   release: () => void;
 };
@@ -87,12 +88,20 @@ export class FinancialTransactionManager {
 
     context.depth -= 1;
     if (context.depth === 0) {
+      for (const callback of context.afterCommitCallbacks) {
+        await callback();
+      }
       this.releaseContext(context);
     }
   }
 
   async rollback(): Promise<void> {
-    const context = this.requireContext();
+    const currentContextId = this.contextStorage.getStore();
+    if (!this.activeContext || !currentContextId || this.activeContext.id !== currentContextId || this.activeContext.depth <= 0) {
+      return;
+    }
+
+    const context = this.activeContext;
 
     if (!context.rolledBack) {
       context.rolledBack = true;
@@ -102,6 +111,11 @@ export class FinancialTransactionManager {
     }
 
     this.releaseContext(context);
+  }
+
+  runAfterCommit(callback: () => void | Promise<void>): void {
+    const context = this.requireContext();
+    context.afterCommitCallbacks.push(callback);
   }
 
   private requireContext(): TransactionContext {
@@ -149,6 +163,7 @@ export class FinancialTransactionManager {
       depth: 1,
       snapshots,
       validators,
+      afterCommitCallbacks: [],
       rolledBack: false,
       release
     };

@@ -78,6 +78,8 @@ export type PaymentSettledPayload = {
 
 export type PaymentAllocatedPayload = {
   payment_id: string;
+  customer_id: string;
+  amount_minor: number;
   allocation_count: number;
   total_allocated_minor: number;
   currency_code: string;

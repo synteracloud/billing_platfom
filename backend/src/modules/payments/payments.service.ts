@@ -59,26 +59,29 @@ export class PaymentsService {
         payload: { after: payment }
       });
 
+      this.transactionManager.runAfterCommit(() => {
+        this.eventsService.logEvent({
+          tenant_id: tenantId,
+          type: 'billing.payment.recorded.v1',
+          aggregate_type: 'payment',
+          aggregate_id: payment.id,
+          aggregate_version: 1,
+          correlation_id: payment.id,
+          idempotency_key: idempotencyKey ? `${idempotencyKey}:event:payment:received` : undefined,
+          action: 'received',
+          payload: {
+            payment_id: payment.id,
+            customer_id: payment.customer_id,
+            amount_minor: payment.amount_received_minor,
+            currency_code: payment.currency,
+            status: payment.status
+          }
+        });
+      });
+
       if (data.allocations && data.allocations.length > 0) {
         await this.allocatePayment(tenantId, payment.id, { allocations: data.allocations }, idempotencyKey);
       }
-
-      this.eventsService.logEvent({
-        tenant_id: tenantId,
-        type: 'billing.payment.recorded.v1',
-        aggregate_type: 'payment',
-        aggregate_id: payment.id,
-        aggregate_version: 1,
-        correlation_id: payment.id,
-        idempotency_key: idempotencyKey,
-        payload: {
-          payment_id: payment.id,
-          customer_id: payment.customer_id,
-          amount_minor: payment.amount_received_minor,
-          currency_code: payment.currency,
-          status: payment.status
-        }
-      });
 
       return this.getPayment(tenantId, payment.id);
     }, this.financialParticipants());
@@ -144,20 +147,25 @@ export class PaymentsService {
       }
 
       const updatedPayment = this.getPayment(tenantId, paymentId);
-      this.eventsService.logEvent({
-        tenant_id: tenantId,
-        type: 'billing.payment.allocated.v1',
-        aggregate_type: 'payment_allocation',
-        aggregate_id: paymentId,
-        aggregate_version: Math.max(1, updatedPayment.allocations.length),
-        correlation_id: paymentId,
-        idempotency_key: idempotencyKey,
-        payload: {
-          payment_id: paymentId,
-          allocation_count: data.allocations.length,
-          total_allocated_minor: requestedTotal,
-          currency_code: payment.currency
-        }
+      this.transactionManager.runAfterCommit(() => {
+        this.eventsService.logEvent({
+          tenant_id: tenantId,
+          type: 'billing.payment.allocated.v1',
+          aggregate_type: 'payment_allocation',
+          aggregate_id: paymentId,
+          aggregate_version: Math.max(1, updatedPayment.allocations.length),
+          correlation_id: paymentId,
+          idempotency_key: idempotencyKey ? `${idempotencyKey}:event:payment:allocated` : undefined,
+          action: 'allocated',
+          payload: {
+            payment_id: paymentId,
+            customer_id: payment.customer_id,
+            amount_minor: payment.amount_received_minor,
+            allocation_count: data.allocations.length,
+            total_allocated_minor: requestedTotal,
+            currency_code: payment.currency
+          }
+        });
       });
 
       return updatedPayment;
