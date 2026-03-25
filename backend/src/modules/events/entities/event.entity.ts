@@ -135,7 +135,9 @@ export type PaymentRefundedPayload = {
 
 export type BillCreatedPayload = {
   bill_id: string;
+  vendor_id?: string;
   created_at: string;
+  due_date?: string | null;
   total_minor: number;
   currency_code: string;
   expense_classification: 'operating' | 'cost_of_goods_sold' | 'asset';
