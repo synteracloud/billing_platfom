@@ -113,7 +113,6 @@ export class PaymentsService {
         }
       }
 
-      const touchedInvoiceIds = new Set<string>();
       let allocationVersion = this.paymentsRepository.listAllocationsByPayment(tenantId, paymentId).length;
       for (const item of data.allocations) {
         const createdAllocation = this.paymentsRepository.createAllocation({
@@ -134,14 +133,27 @@ export class PaymentsService {
           correlation_id: paymentId,
           payload: { invoice_id: item.invoice_id, after: createdAllocation }
         });
-        touchedInvoiceIds.add(item.invoice_id);
+
+        this.eventsService.logEvent({
+          tenant_id: tenantId,
+          type: 'billing.invoice.payment_allocation_referenced.v1',
+          aggregate_type: 'invoice',
+          aggregate_id: item.invoice_id,
+          aggregate_version: Math.max(1, allocationVersion),
+          correlation_id: paymentId,
+          idempotency_key: idempotencyKey ? `${idempotencyKey}:invoice-ref:${item.invoice_id}:${allocationVersion}` : undefined,
+          payload: {
+            invoice_id: item.invoice_id,
+            payment_id: paymentId,
+            allocation_id: createdAllocation.id,
+            allocated_minor: item.allocated_minor,
+            allocation_date: createdAllocation.allocation_date,
+            currency_code: payment.currency
+          }
+        });
       }
 
       this.refreshPaymentAllocationBalance(tenantId, paymentId, paymentId);
-
-      for (const invoiceId of touchedInvoiceIds) {
-        this.syncInvoicePaymentStatus(tenantId, invoiceId, paymentId);
-      }
 
       const updatedPayment = this.getPayment(tenantId, paymentId);
       this.eventsService.logEvent({
@@ -205,9 +217,23 @@ export class PaymentsService {
         payload: { before: payment, after: updatedPayment }
       });
 
-      const touchedInvoiceIds = new Set(removedAllocations.map((allocation) => allocation.invoice_id));
-      for (const invoiceId of touchedInvoiceIds) {
-        this.syncInvoicePaymentStatus(tenantId, invoiceId, paymentId);
+      for (const allocation of removedAllocations) {
+        this.eventsService.logEvent({
+          tenant_id: tenantId,
+          type: 'billing.invoice.payment_allocation_reversed.v1',
+          aggregate_type: 'invoice',
+          aggregate_id: allocation.invoice_id,
+          aggregate_version: 1,
+          correlation_id: paymentId,
+          idempotency_key: idempotencyKey ? `${idempotencyKey}:invoice-ref-reversed:${allocation.id}` : undefined,
+          payload: {
+            invoice_id: allocation.invoice_id,
+            payment_id: paymentId,
+            allocation_id: allocation.id,
+            reversed_minor: allocation.allocated_minor,
+            currency_code: payment.currency
+          }
+        });
       }
 
       this.eventsService.logEvent({
@@ -277,46 +303,6 @@ export class PaymentsService {
       aggregate_version: Math.max(1, updated.allocated_minor > 0 ? 2 : 1),
       correlation_id: correlationId,
       payload: { before: payment, after: updated }
-    });
-  }
-
-  private syncInvoicePaymentStatus(tenantId: string, invoiceId: string, correlationId: string): void {
-    const invoice = this.invoicesRepository.findById(tenantId, invoiceId);
-    if (!invoice || invoice.status === 'void') {
-      return;
-    }
-
-    const allocated = this.paymentsRepository.sumAllocatedForInvoice(tenantId, invoiceId);
-    const paidMinor = Math.min(allocated, invoice.total_minor);
-    const dueMinor = Math.max(0, invoice.total_minor - paidMinor);
-
-    let nextStatus: InvoiceEntity['status'];
-    if (paidMinor <= 0) {
-      nextStatus = 'issued';
-    } else if (dueMinor === 0) {
-      nextStatus = 'paid';
-    } else {
-      nextStatus = 'partially_paid';
-    }
-
-    const updated = this.invoicesRepository.update(tenantId, invoiceId, {
-      status: nextStatus,
-      amount_paid_minor: paidMinor,
-      amount_due_minor: dueMinor
-    });
-
-    if (!updated) {
-      throw new NotFoundException(`Invoice not found: ${invoiceId}`);
-    }
-
-    this.eventsService.logMutation({
-      tenant_id: tenantId,
-      entity_type: 'invoice',
-      entity_id: invoiceId,
-      action: 'payment_status_synced',
-      aggregate_version: nextStatus === 'issued' ? 2 : 3,
-      correlation_id: correlationId,
-      payload: { before: invoice, after: updated }
     });
   }
 

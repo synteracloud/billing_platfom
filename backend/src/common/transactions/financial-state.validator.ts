@@ -61,20 +61,8 @@ export class FinancialStateValidator {
         throw new BadRequestException(`Invoice due balance mismatch detected for invoice ${invoice.id}`);
       }
 
-      if (!this.paymentsRepository) {
-        continue;
-      }
-
-      const allocationTotal = this.paymentsRepository
-        .listAllocationsByInvoice(invoice.tenant_id, invoice.id)
-        .reduce((sum, allocation) => {
-          this.requireNonNegative(allocation.allocated_minor, `payment_allocation.allocated_minor:${allocation.id}`);
-          return sum + allocation.allocated_minor;
-        }, 0);
-
-      if (invoice.amount_paid_minor !== allocationTotal) {
-        throw new BadRequestException(`Invoice payment imbalance detected for invoice ${invoice.id}`);
-      }
+      // Payments track allocation references independently and must not mutate invoice balances directly.
+      // Invoice paid/due fields remain validated for internal consistency only.
     }
   }
 
