@@ -65,7 +65,8 @@ export class BullMqQueueDriver implements QueueDriver, OnModuleDestroy {
       }
     );
 
-    this.worker.on('failed', (job: { data?: QueueEnvelope; attemptsMade?: number } | undefined, error: unknown) => {
+    this.worker.on('failed', (...args: unknown[]) => {
+      const [job, error] = args as [{ data?: QueueEnvelope; attemptsMade?: number } | undefined, unknown];
       this.logger.error(
         `Event job ${job?.data?.event_id ?? 'unknown'} failed on attempt ${(job?.attemptsMade ?? 0) + 1}: ${(error as Error).message}`
       );
