@@ -31,20 +31,20 @@ function sampleResponse() {
   return {
     records: [
       {
-        source_object_type: 'payment',
-        source_object_id: 'ext-pay-1',
+        source_object_type: ' payment ',
+        source_object_id: ' ext-pay-1 ',
         occurred_at: '2026-03-25T00:00:00.000Z',
         raw_payload: { id: 'ext-pay-1', amount_minor: 1000, currency: 'USD' },
-        canonical_entity: 'payment',
+        canonical_entity: 'should_be_ignored',
         amount_minor: 1000,
-        currency_code: 'USD'
+        currency_code: 'usd'
       },
       {
-        source_object_type: 'payment',
+        source_object_type: 'transaction',
         source_object_id: 'ext-pay-2',
         occurred_at: '2026-03-25T00:05:00.000Z',
         raw_payload: { id: 'ext-pay-2', amount_minor: 2500, currency: 'USD' },
-        canonical_entity: 'payment',
+        canonical_entity: 'bank_transaction',
         amount_minor: 2500,
         currency_code: 'USD'
       }
@@ -75,7 +75,25 @@ test('simulate repeated pulls and validate deduplication (no duplicate ingestion
   assert.equal(second.ingested_count, 0);
   assert.equal(second.duplicate_count, 2);
   assert.equal(pollingService.listRawResponses('tenant-1', 'stripe').length, 2);
+  assert.equal(pollingService.listNormalizedRecords('tenant-1', 'stripe').length, 2);
   assert.equal(eventsRepository.listAll().filter((event) => event.type === 'integration.record.normalized.v1').length, 2);
+});
+
+test('normalization is canonical and connector-decoupled', async () => {
+  const { pollingService } = createPollingSystem();
+
+  pollingService.executePull({
+    tenant_id: 'tenant-1',
+    connector_id: 'stripe',
+    pulled_at: '2026-03-25T10:00:00.000Z',
+    response: sampleResponse()
+  });
+
+  const normalized = pollingService.listNormalizedRecords('tenant-1', 'stripe');
+  assert.equal(normalized[0].canonical_entity, 'payment');
+  assert.equal(normalized[0].currency_code, 'USD');
+  assert.equal(normalized[0].source_object_type, 'payment');
+  assert.equal(normalized[1].canonical_entity, 'bank_transaction');
 });
 
 test('safe retries and stable scheduling prevent duplicate slot execution', async () => {
