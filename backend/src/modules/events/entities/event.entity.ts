@@ -12,6 +12,8 @@ export const CANONICAL_EVENT_TYPES = [
   'billing.payment.allocated.v1',
   'billing.payment.refunded.v1',
   'billing.bill.created.v1',
+  'billing.bill.approved.v1',
+  'billing.bill.paid.v1',
   'accounting.journal.posted.v1',
   'accounting.journal.reversed.v1',
   'subledger.receivable.updated.v1',
@@ -145,6 +147,22 @@ export type PaymentAllocationChange = {
   allocated_delta_minor: number;
 };
 
+
+export type BillApprovedPayload = {
+  bill_id: string;
+  vendor_id: string;
+  approved_at: string;
+  due_date: string | null;
+  total_minor: number;
+  currency_code: string;
+};
+
+export type BillPaidPayload = {
+  bill_id: string;
+  paid_at: string;
+  amount_paid_minor: number;
+};
+
 export type JournalPostedPayload = {
   journal_entry_id: string;
   source_type: string;
@@ -235,6 +253,8 @@ export type DomainEventPayloadMap = {
   'billing.payment.allocated.v1': PaymentAllocatedPayload;
   'billing.payment.refunded.v1': PaymentRefundedPayload;
   'billing.bill.created.v1': BillCreatedPayload;
+  'billing.bill.approved.v1': BillApprovedPayload;
+  'billing.bill.paid.v1': BillPaidPayload;
   'accounting.journal.posted.v1': JournalPostedPayload;
   'accounting.journal.reversed.v1': JournalReversedPayload;
   'subledger.receivable.updated.v1': ReceivableUpdatedPayload;
