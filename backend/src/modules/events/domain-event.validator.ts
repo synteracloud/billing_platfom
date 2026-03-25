@@ -85,6 +85,8 @@ const payloadValidators: {
   'billing.bill.created.v1': (payload) => {
     requireString(payload.bill_id, 'payload.bill_id');
     requireString(payload.created_at, 'payload.created_at');
+    requireOptionalString(payload.vendor_id, 'payload.vendor_id');
+    requireOptionalNullableString(payload.due_date, 'payload.due_date');
     requireNumber(payload.total_minor, 'payload.total_minor');
     requireString(payload.currency_code, 'payload.currency_code');
     requireEnum(
@@ -204,6 +206,22 @@ function requireString(value: unknown, field: string): void {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new BadRequestException(`${field} is required`);
   }
+}
+
+function requireOptionalString(value: unknown, field: string): void {
+  if (value === undefined) {
+    return;
+  }
+
+  requireString(value, field);
+}
+
+function requireOptionalNullableString(value: unknown, field: string): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+
+  requireString(value, field);
 }
 
 function requireNumber(value: unknown, field: string): void {
