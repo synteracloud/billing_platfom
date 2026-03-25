@@ -25,6 +25,7 @@ export interface ReconciliationSuggestion {
   }>;
   requires_manual_override: boolean;
   auto_apply: false;
+  authoritative: false;
 }
 
 interface CreateManualMatchInput {
@@ -178,14 +179,18 @@ export class ReconciliationService {
         rationale: ['No candidate passed currency/tenant compatibility checks'],
         candidate_rankings: [],
         requires_manual_override: true,
-        auto_apply: false
+        auto_apply: false,
+        authoritative: false
       };
     }
 
     const top = scoredCandidates[0];
     const next = scoredCandidates[1];
     const confidenceGap = next ? top.score - next.score : 1;
-    const isConfident = top.score >= 0.55 && confidenceGap >= 0.08;
+    const hasReferenceSignal = top.reasons.some((reason) => reason === 'Reference identifier match');
+    const minimumScore = hasReferenceSignal ? 0.55 : 0.65;
+    const minimumGap = hasReferenceSignal ? 0.08 : 0.14;
+    const isConfident = top.score >= minimumScore && confidenceGap >= minimumGap;
 
     return {
       unmatched_transaction_id: transaction.id,
@@ -201,7 +206,8 @@ export class ReconciliationService {
           confidence_score: Number(candidate.score.toFixed(4))
         })),
       requires_manual_override: true,
-      auto_apply: false
+      auto_apply: false,
+      authoritative: false
     };
   }
 
@@ -227,8 +233,9 @@ export class ReconciliationService {
     const counterpartyScore = this.counterpartySimilarity(transaction.counterparty_name, candidate.counterparty_name);
 
     const weightedScore = amountSimilarity * 0.45 + dateScore * 0.25 + referenceScore * 0.25 + counterpartyScore * 0.05;
+    const ambiguityPenalty = referenceScore === 0 && counterpartyScore < 0.75 ? 0.9 : 1;
 
-    return Math.max(0, Math.min(1, weightedScore));
+    return Math.max(0, Math.min(1, weightedScore * ambiguityPenalty));
   }
 
   private buildRationale(

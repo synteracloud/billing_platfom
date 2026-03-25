@@ -31,6 +31,39 @@ export interface ClassificationResult {
   deterministic_fallback_used: boolean;
 }
 
+export interface CollectionsPredictionItem {
+  invoice_id: string;
+  customer_id: string;
+  due_date: string;
+  open_amount_minor: number;
+  probability_of_delay: number;
+  drivers: string[];
+  rationale: string[];
+}
+
+export interface CollectionsPredictionReport {
+  assistive_only: true;
+  no_automatic_actions: true;
+  model_version: 'deterministic_v1';
+  predictions: CollectionsPredictionItem[];
+}
+
+export interface CopilotSuggestion {
+  suggestion_id: string;
+  priority: 'high' | 'medium' | 'low';
+  summary: string;
+  rationale: string[];
+  recommended_actions: string[];
+  authoritative: false;
+}
+
+export interface CopilotSuggestionReport {
+  assistive_only: true;
+  authoritative: false;
+  no_automatic_actions: true;
+  suggestions: CopilotSuggestion[];
+}
+
 export interface CashflowPoint {
   date: string;
   inflow_minor: number;
@@ -274,6 +307,201 @@ export class AnalyticsService {
     };
   }
 
+  classifyTransaction(input: ClassificationInput): ClassificationResult {
+    const evidence = [
+      input.transaction_description,
+      typeof input.metadata?.['merchant_name'] === 'string' ? String(input.metadata['merchant_name']) : null,
+      input.ocr?.text,
+      ...Object.values(input.ocr?.fields ?? {}).map((value) => (value == null ? null : String(value)))
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(' ')
+      .toLowerCase();
+
+    const categorySignals: Array<{ category: TransactionClassificationCategory; keywords: string[]; reason: string }> = [
+      { category: 'expense', keywords: ['bill', 'vendor', 'expense', 'utilities', 'rent', 'office'], reason: 'expense_keywords' },
+      { category: 'revenue', keywords: ['invoice', 'customer payment', 'sale', 'subscription'], reason: 'revenue_keywords' },
+      { category: 'asset', keywords: ['equipment', 'deposit', 'prepaid', 'asset'], reason: 'asset_keywords' },
+      { category: 'liability', keywords: ['loan', 'tax payable', 'payroll payable', 'liability'], reason: 'liability_keywords' },
+      { category: 'transfer', keywords: ['transfer', 'sweep', 'internal move'], reason: 'transfer_keywords' },
+      { category: 'equity', keywords: ['owner contribution', 'dividend', 'equity'], reason: 'equity_keywords' }
+    ];
+
+    const scored = categorySignals
+      .map((signal) => {
+        const matchedKeywords = signal.keywords.filter((keyword) => evidence.includes(keyword));
+        return {
+          category: signal.category,
+          count: matchedKeywords.length,
+          matchedKeywords,
+          reason: signal.reason
+        };
+      })
+      .filter((signal) => signal.count > 0)
+      .sort((left, right) => right.count - left.count);
+
+    if (scored.length === 0) {
+      return {
+        category: 'other',
+        confidence_score: 0.35,
+        rationale: ['No deterministic keyword signal found; defaulting to other'],
+        deterministic_fallback_used: true
+      };
+    }
+
+    const top = scored[0];
+    const confidenceScore = Math.max(0.4, Math.min(0.95, 0.45 + top.count * 0.15));
+    return {
+      category: top.category,
+      confidence_score: Number(confidenceScore.toFixed(2)),
+      rationale: [`Matched ${top.reason}`, ...top.matchedKeywords.map((keyword) => `keyword:${keyword}`)],
+      deterministic_fallback_used: false
+    };
+  }
+
+  getCollectionsPrediction(tenantId: string): CollectionsPredictionReport {
+    const invoices = this.arRepository.listInvoices(tenantId);
+    const closedInvoices = invoices.filter((invoice) => invoice.status === 'closed');
+    const openInvoices = invoices.filter((invoice) => invoice.status === 'open' && invoice.open_amount_minor > 0);
+
+    const customerHistory = new Map<
+      string,
+      {
+        total_closed: number;
+        late_count: number;
+        cumulative_late_days: number;
+      }
+    >();
+
+    for (const invoice of closedInvoices) {
+      const history = customerHistory.get(invoice.customer_id) ?? { total_closed: 0, late_count: 0, cumulative_late_days: 0 };
+      history.total_closed += 1;
+      const daysLate = this.diffInDaysSigned(invoice.updated_at, invoice.due_date ?? invoice.issue_date);
+      if (daysLate > 0) {
+        history.late_count += 1;
+        history.cumulative_late_days += daysLate;
+      }
+      customerHistory.set(invoice.customer_id, history);
+    }
+
+    const referenceDate = invoices
+      .map((invoice) => invoice.updated_at)
+      .sort((left, right) => right.localeCompare(left))[0]
+      ?.slice(0, 10) ?? '1970-01-01';
+
+    const predictions = openInvoices
+      .map((invoice) => {
+        const history = customerHistory.get(invoice.customer_id) ?? { total_closed: 0, late_count: 0, cumulative_late_days: 0 };
+        const lateRatio = history.total_closed === 0 ? 0.25 : history.late_count / history.total_closed;
+        const avgLateDays = history.late_count === 0 ? 0 : history.cumulative_late_days / history.late_count;
+        const invoiceDueDate = invoice.due_date ?? invoice.issue_date;
+        const overdueDays = Math.max(0, this.diffInDaysSigned(referenceDate, invoiceDueDate));
+
+        const score =
+          0.2 +
+          lateRatio * 0.5 +
+          Math.min(1, avgLateDays / 30) * 0.15 +
+          Math.min(1, overdueDays / 30) * 0.15;
+        const probability = Number(Math.max(0.01, Math.min(0.99, score)).toFixed(4));
+
+        const drivers: string[] = [];
+        if (lateRatio >= 0.4) {
+          drivers.push('customer_history_late_payments');
+        }
+        if (avgLateDays >= 7) {
+          drivers.push('customer_history_avg_days_late');
+        }
+        if (overdueDays > 0) {
+          drivers.push('invoice_currently_overdue');
+        }
+        if (drivers.length === 0) {
+          drivers.push('baseline_open_invoice_risk');
+        }
+
+        return {
+          invoice_id: invoice.invoice_id,
+          customer_id: invoice.customer_id,
+          due_date: invoiceDueDate,
+          open_amount_minor: invoice.open_amount_minor,
+          probability_of_delay: probability,
+          drivers,
+          rationale: [
+            `late_ratio=${lateRatio.toFixed(2)}`,
+            `avg_late_days=${avgLateDays.toFixed(1)}`,
+            `overdue_days=${overdueDays}`
+          ]
+        };
+      })
+      .sort((left, right) => {
+        if (right.probability_of_delay !== left.probability_of_delay) {
+          return right.probability_of_delay - left.probability_of_delay;
+        }
+
+        if (left.due_date !== right.due_date) {
+          return left.due_date.localeCompare(right.due_date);
+        }
+
+        return left.invoice_id.localeCompare(right.invoice_id);
+      });
+
+    return {
+      assistive_only: true,
+      no_automatic_actions: true,
+      model_version: 'deterministic_v1',
+      predictions
+    };
+  }
+
+  getCopilotSuggestions(tenantId: string): CopilotSuggestionReport {
+    const anomalies = this.getAnomalies(tenantId).anomalies.slice(0, 2);
+    const collections = this.getCollectionsPrediction(tenantId).predictions.slice(0, 2);
+    const suggestions: CopilotSuggestion[] = [];
+
+    for (const anomaly of anomalies) {
+      suggestions.push({
+        suggestion_id: `anomaly-${anomaly.date}-${anomaly.type}`,
+        priority: anomaly.score >= 5 ? 'high' : 'medium',
+        summary: `Review ${anomaly.type.replaceAll('_', ' ')} on ${anomaly.date}`,
+        rationale: [anomaly.note, `score=${anomaly.score}`, `threshold_minor=${anomaly.threshold_minor}`],
+        recommended_actions: ['Verify supporting entries in ledger', 'Confirm source transaction metadata before any action'],
+        authoritative: false
+      });
+    }
+
+    for (const row of collections) {
+      if (row.probability_of_delay < 0.5) {
+        continue;
+      }
+
+      suggestions.push({
+        suggestion_id: `collections-${row.invoice_id}`,
+        priority: row.probability_of_delay >= 0.75 ? 'high' : 'medium',
+        summary: `Prepare proactive follow-up for invoice ${row.invoice_id}`,
+        rationale: [`Predicted delay probability ${row.probability_of_delay}`, ...row.drivers],
+        recommended_actions: ['Queue reminder draft for analyst review', 'Cross-check customer payment history before outreach'],
+        authoritative: false
+      });
+    }
+
+    if (suggestions.length === 0) {
+      suggestions.push({
+        suggestion_id: 'monitoring-baseline',
+        priority: 'low',
+        summary: 'No elevated AI signals; continue routine monitoring',
+        rationale: ['No high-confidence anomaly or collections risk detected from current records'],
+        recommended_actions: ['Keep weekly review cadence', 'Treat AI output as assistive context only'],
+        authoritative: false
+      });
+    }
+
+    return {
+      assistive_only: true,
+      authoritative: false,
+      no_automatic_actions: true,
+      suggestions
+    };
+  }
+
   private buildProjection(items: Array<{ date: string; amount_minor: number; currency_code: string }>): ProjectionReport {
     const byDay = new Map<string, number>();
     let currencyCode = 'USD';
@@ -317,7 +545,9 @@ export class AnalyticsService {
 
   private computeRobustScore(value: number, median: number, mad: number): number {
     if (mad === 0) {
-      return value === median ? 0 : Number.POSITIVE_INFINITY;
+      const baseline = Math.max(Math.abs(median), 1);
+      const relativeDelta = Math.abs(value - median) / baseline;
+      return relativeDelta * 0.6745;
     }
 
     return (0.6745 * (value - median)) / mad;
@@ -325,5 +555,16 @@ export class AnalyticsService {
 
   private computeThreshold(median: number, mad: number, zScore: number): number {
     return Math.round(median + (zScore * mad) / 0.6745);
+  }
+
+  private diffInDaysSigned(left: string, right: string): number {
+    const leftTime = Date.parse(left);
+    const rightTime = Date.parse(right);
+    if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) {
+      return 0;
+    }
+
+    const dayMs = 24 * 60 * 60 * 1000;
+    return Math.round((leftTime - rightTime) / dayMs);
   }
 }
