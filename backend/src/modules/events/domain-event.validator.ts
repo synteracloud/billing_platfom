@@ -19,6 +19,23 @@ const payloadValidators: {
     requireNumber(payload.total_minor, 'payload.total_minor');
     requireString(payload.currency_code, 'payload.currency_code');
   },
+  'billing.invoice.sent.v1': (payload) => {
+    requireString(payload.invoice_id, 'payload.invoice_id');
+    requireString(payload.customer_id, 'payload.customer_id');
+    requireString(payload.to_email, 'payload.to_email');
+    requireString(payload.sent_at, 'payload.sent_at');
+    requireNumber(payload.total_minor, 'payload.total_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
+  },
+  'billing.invoice.paid.v1': (payload) => {
+    requireString(payload.invoice_id, 'payload.invoice_id');
+    requireString(payload.customer_id, 'payload.customer_id');
+    requireString(payload.payment_status, 'payload.payment_status');
+    requireNumber(payload.amount_paid_minor, 'payload.amount_paid_minor');
+    requireNumber(payload.amount_due_minor, 'payload.amount_due_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
+    requireString(payload.paid_at, 'payload.paid_at');
+  },
   'billing.invoice.issued.v1': (payload) => {
     requireString(payload.invoice_id, 'payload.invoice_id');
     requireString(payload.issue_date, 'payload.issue_date');
