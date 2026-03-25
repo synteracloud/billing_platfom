@@ -216,3 +216,43 @@ test('blocks postings with unknown accounts or missing required event accounts',
   assert.equal(ledgerRepository.findBySourceEvent('tenant-1', 'event-invoice-3', '2025-01-01'), undefined);
   assert.equal(eventsRepository.listByTenant('tenant-1', {}).length, 0);
 });
+
+test('posts bill.created to expense and accounts payable idempotently', async () => {
+  const { ledgerService, eventsRepository } = createLedgerService();
+
+  const billCreatedEvent = eventsRepository.create({
+    id: 'evt-bill-1',
+    type: 'billing.bill.created.v1',
+    version: 1,
+    tenant_id: 'tenant-1',
+    payload: {
+      bill_id: 'bill-evt-1',
+      created_at: '2025-01-21T00:00:00.000Z',
+      total_minor: 3100,
+      currency_code: 'USD',
+      expense_classification: 'operating'
+    },
+    occurred_at: '2025-01-21T00:00:00.000Z',
+    recorded_at: '2025-01-21T00:00:00.000Z',
+    aggregate_type: 'bill',
+    aggregate_id: 'bill-evt-1',
+    aggregate_version: 1,
+    causation_id: null,
+    correlation_id: null,
+    idempotency_key: 'bill-evt-1',
+    producer: 'test'
+  });
+
+  const first = await ledgerService.postEvent('tenant-1', billCreatedEvent.id, 'bill-retry-1', '2025-01-01');
+  const duplicate = await ledgerService.postEvent('tenant-1', billCreatedEvent.id, 'bill-retry-2', '2025-01-01');
+
+  assert.equal(first.id, duplicate.id);
+  assert.equal(first.lines.length, 2);
+  assert.deepEqual(
+    first.lines.map((line) => [line.account_code, line.direction, line.amount_minor]),
+    [
+      ['5000', 'debit', 3100],
+      ['2000', 'credit', 3100]
+    ]
+  );
+});

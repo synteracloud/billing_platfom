@@ -81,6 +81,17 @@ const payloadValidators: {
     requireString(payload.currency_code, 'payload.currency_code');
     requireAllocationChanges(payload.allocation_changes, 'payload.allocation_changes');
   },
+  'billing.bill.created.v1': (payload) => {
+    requireString(payload.bill_id, 'payload.bill_id');
+    requireString(payload.created_at, 'payload.created_at');
+    requireNumber(payload.total_minor, 'payload.total_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
+    requireEnum(
+      payload.expense_classification,
+      'payload.expense_classification',
+      ['operating', 'cost_of_goods_sold', 'asset'] as const
+    );
+  },
   'accounting.journal.posted.v1': (payload) => {
     requireString(payload.journal_entry_id, 'payload.journal_entry_id');
     requireString(payload.source_type, 'payload.source_type');
@@ -212,5 +223,15 @@ function requireAllocationChanges(value: unknown, field: string): void {
 
     requireString((item as { invoice_id?: unknown }).invoice_id, `${field}[${index}].invoice_id`);
     requireNumber((item as { allocated_delta_minor?: unknown }).allocated_delta_minor, `${field}[${index}].allocated_delta_minor`);
+  }
+}
+
+function requireEnum<TValue extends string>(
+  value: unknown,
+  field: string,
+  allowedValues: readonly TValue[]
+): asserts value is TValue {
+  if (typeof value !== 'string' || !allowedValues.includes(value as TValue)) {
+    throw new BadRequestException(`${field} must be one of: ${allowedValues.join(', ')}`);
   }
 }

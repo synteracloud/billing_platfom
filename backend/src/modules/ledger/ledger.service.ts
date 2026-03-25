@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
 import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
-import { DomainEvent, InvoiceIssuedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
+import { BillCreatedPayload, DomainEvent, InvoiceIssuedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
@@ -13,6 +13,7 @@ const SUPPORTED_EVENT_NAMES = new Set([
   'billing.invoice.issued.v1',
   'billing.payment.settled.v1',
   'billing.payment.refunded.v1',
+  'billing.bill.created.v1',
   'billing.bill.approved.v1',
   'billing.bill.paid.v1'
 ]);
@@ -39,6 +40,10 @@ const EVENT_DIRECTIONAL_ACCOUNT_RULES = new Map<string, Array<{ direction: Journ
     { direction: 'credit', codes: ['1000'] }
   ]],
   ['billing.bill.approved.v1', [
+    { direction: 'debit', codes: ['5000'] },
+    { direction: 'credit', codes: ['2000'] }
+  ]],
+  ['billing.bill.created.v1', [
     { direction: 'debit', codes: ['5000'] },
     { direction: 'credit', codes: ['2000'] }
   ]],
@@ -367,6 +372,24 @@ export class LedgerService {
       case 'billing.bill.approved.v1':
       case 'billing.bill.paid.v1':
         throw new BadRequestException(`Automatic posting for ${eventType} is not yet implemented`);
+      case 'billing.bill.created.v1': {
+        const payload = event.payload as BillCreatedPayload;
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'bill',
+          source_id: payload.bill_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: payload.created_at.slice(0, 10),
+          currency_code: payload.currency_code,
+          description: `Bill created ${payload.bill_id} (${payload.expense_classification})`,
+          entries: [
+            this.createPostingLine('5000', 'Expense', 'debit', payload.total_minor, payload.currency_code),
+            this.createPostingLine('2000', 'Accounts Payable', 'credit', payload.total_minor, payload.currency_code)
+          ]
+        };
+      }
       default:
         throw new BadRequestException(`Unsupported event_name: ${eventType}`);
     }
