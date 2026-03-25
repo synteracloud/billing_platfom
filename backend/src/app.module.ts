@@ -4,6 +4,7 @@ import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
 import { BankConnectorModule } from './modules/bank-connector/bank-connector.module';
 import { ArModule } from './modules/ar/ar.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { ApModule } from './modules/ap/ap.module';
 import { DatabaseModule } from './database/database.module';
 import { CustomersModule } from './modules/customers/customers.module';
@@ -47,6 +48,7 @@ import { CashflowModule } from './modules/cashflow/cashflow.module';
     AuthModule,
     ArModule,
     ApModule,
+    AnalyticsModule,
     WebhooksModule,
     ReconciliationModule,
     CashflowModule

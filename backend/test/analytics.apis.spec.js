@@ -1,0 +1,193 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { AnalyticsService } = require('../.tmp-test-dist/modules/analytics/analytics.service');
+const { AnalyticsReadOnlyGuard } = require('../.tmp-test-dist/modules/analytics/analytics-readonly.guard');
+const { LedgerRepository } = require('../.tmp-test-dist/modules/ledger/ledger.repository');
+const { ArRepository } = require('../.tmp-test-dist/modules/ar/ar.repository');
+const { ApRepository } = require('../.tmp-test-dist/modules/ap/ap.repository');
+
+function buildExecutionContext(method) {
+  return {
+    switchToHttp: () => ({
+      getRequest: () => ({ method })
+    })
+  };
+}
+
+function createLedgerEntry(ledgerRepository, entry) {
+  ledgerRepository.create(
+    {
+      id: entry.id,
+      tenant_id: entry.tenant_id,
+      source_type: 'event',
+      source_id: entry.id,
+      source_event_id: `${entry.id}-evt`,
+      event_name: 'billing.payment.settled.v1',
+      rule_version: '1',
+      entry_date: entry.entry_date,
+      currency_code: 'USD',
+      description: null,
+      created_at: `${entry.entry_date}T00:00:00.000Z`
+    },
+    entry.lines.map((line, index) => ({
+      id: `${entry.id}-line-${index + 1}`,
+      tenant_id: entry.tenant_id,
+      journal_entry_id: entry.id,
+      line_number: index + 1,
+      account_code: line.account_code,
+      account_name: line.account_name,
+      direction: line.direction,
+      amount_minor: line.amount_minor,
+      currency_code: 'USD',
+      created_at: `${entry.entry_date}T00:00:00.000Z`
+    }))
+  );
+}
+
+test('analytics APIs match calculations from raw AR/AP and ledger data', () => {
+  const tenantId = 'tenant-analytics';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-1',
+    customer_id: 'cust-1',
+    currency_code: 'USD',
+    issue_date: '2026-02-01',
+    due_date: '2026-02-15',
+    total_minor: 5000,
+    open_amount_minor: 4000,
+    paid_amount_minor: 1000,
+    status: 'open',
+    updated_at: '2026-02-01T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-2',
+    customer_id: 'cust-2',
+    currency_code: 'USD',
+    issue_date: '2026-02-02',
+    due_date: null,
+    total_minor: 2000,
+    open_amount_minor: 2000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-02-02T00:00:00.000Z'
+  });
+
+  apRepository.upsertBill(tenantId, {
+    bill_id: 'bill-1',
+    vendor_id: 'vendor-1',
+    currency_code: 'USD',
+    approved_at: '2026-02-01',
+    due_date: '2026-02-10',
+    total_minor: 2500,
+    open_amount_minor: 2500,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-02-01T00:00:00.000Z'
+  });
+  apRepository.upsertBill(tenantId, {
+    bill_id: 'bill-2',
+    vendor_id: 'vendor-2',
+    currency_code: 'USD',
+    approved_at: '2026-02-03',
+    due_date: null,
+    total_minor: 1500,
+    open_amount_minor: 1000,
+    paid_amount_minor: 500,
+    status: 'open',
+    updated_at: '2026-02-03T00:00:00.000Z'
+  });
+
+  createLedgerEntry(ledgerRepository, {
+    id: 'je-1',
+    tenant_id: tenantId,
+    entry_date: '2026-02-01',
+    lines: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 4000 },
+      { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: 4000 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'je-2',
+    tenant_id: tenantId,
+    entry_date: '2026-02-05',
+    lines: [
+      { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: 1800 },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 1800 }
+    ]
+  });
+
+  const rawCashIn = 4000;
+  const rawCashOut = 1800;
+  const rawCashNet = rawCashIn - rawCashOut;
+
+  const cashflow = analyticsService.getCashflow(tenantId);
+  assert.equal(cashflow.totals.inflow_minor, rawCashIn);
+  assert.equal(cashflow.totals.outflow_minor, rawCashOut);
+  assert.equal(cashflow.totals.net_minor, rawCashNet);
+
+  const inflow = analyticsService.getInflowProjection(tenantId);
+  assert.equal(inflow.total_minor, 6000);
+  assert.deepEqual(inflow.by_day, [
+    { date: '2026-02-02', amount_minor: 2000 },
+    { date: '2026-02-15', amount_minor: 4000 }
+  ]);
+
+  const outflow = analyticsService.getOutflowProjection(tenantId);
+  assert.equal(outflow.total_minor, 3500);
+  assert.deepEqual(outflow.by_day, [
+    { date: '2026-02-03', amount_minor: 1000 },
+    { date: '2026-02-10', amount_minor: 2500 }
+  ]);
+
+  const runway = analyticsService.getRunway(tenantId, 10);
+  assert.equal(runway.cash_on_hand_minor, rawCashNet);
+  assert.equal(runway.projected_daily_net_burn_minor, 0);
+  assert.equal(runway.projected_runway_days, null);
+});
+
+test('runway handles burn and edge cases with zero/negative horizon', () => {
+  const tenantId = 'tenant-analytics-edge';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  apRepository.upsertBill(tenantId, {
+    bill_id: 'bill-burn',
+    vendor_id: 'vendor-1',
+    currency_code: 'USD',
+    approved_at: '2026-03-01',
+    due_date: '2026-03-10',
+    total_minor: 3000,
+    open_amount_minor: 3000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-03-01T00:00:00.000Z'
+  });
+
+  createLedgerEntry(ledgerRepository, {
+    id: 'je-edge',
+    tenant_id: tenantId,
+    entry_date: '2026-03-01',
+    lines: [
+      { account_code: '1010', account_name: 'Operating Cash', direction: 'debit', amount_minor: 900 },
+      { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: 900 }
+    ]
+  });
+
+  const runway = analyticsService.getRunway(tenantId, -1);
+  assert.equal(runway.based_on_horizon_days, 90);
+  assert.equal(runway.projected_daily_net_burn_minor, 33);
+  assert.equal(runway.projected_runway_days, 26);
+});
+
+test('analytics read-only guard blocks non-GET methods', () => {
+  const guard = new AnalyticsReadOnlyGuard();
+  assert.equal(guard.canActivate(buildExecutionContext('GET')), true);
+  assert.throws(() => guard.canActivate(buildExecutionContext('PATCH')));
+});
