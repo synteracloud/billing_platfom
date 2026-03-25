@@ -17,6 +17,7 @@ const sourceFiles = [
   'src/modules/payments/dto/allocate-payment.dto.ts',
   'src/modules/payments/payments.repository.ts',
   'src/modules/payments/payments.service.ts',
+  'src/modules/payments/connectors/stripe/stripe.connector.ts',
   'src/modules/idempotency/entities/idempotency-key.entity.ts',
   'src/modules/idempotency/idempotency.repository.ts',
   'src/modules/idempotency/idempotency.service.ts',
@@ -77,3 +78,5 @@ require('./test/payments.idempotency.spec.js');
 require('./test/ar.service.spec.js');
 require('./test/customer-balance.consumer.spec.js');
 require('./test/ar.batch6.qc.spec.js');
+
+require('./test/stripe.connector.spec.js');
