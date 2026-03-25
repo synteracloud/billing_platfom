@@ -49,6 +49,7 @@ test('recon assistant suggests high-confidence matches without auto-applying', (
   assert.equal(suggestions[0].suggested_candidate_id, 'inv-1001');
   assert.equal(suggestions[0].auto_apply, false);
   assert.equal(suggestions[0].requires_manual_override, true);
+  assert.equal(suggestions[0].authoritative, false);
   assert(suggestions[0].confidence_score >= 0.9);
   assert.deepEqual(
     suggestions[0].candidate_rankings.map((item) => item.candidate_id),
@@ -97,6 +98,42 @@ test('recon assistant reduces false positives for complex ambiguous matches', ()
   assert.equal(suggestions[0].suggested_candidate_id, null);
   assert.equal(suggestions[0].auto_apply, false);
   assert.equal(suggestions[0].requires_manual_override, true);
+  assert.equal(suggestions[0].authoritative, false);
   assert.equal(suggestions[0].candidate_rankings.length, 2);
   assert.equal(suggestions[0].candidate_rankings[0].confidence_score, suggestions[0].candidate_rankings[1].confidence_score);
+});
+
+test('recon assistant avoids weak suggestions when only amount/date align without reference evidence', () => {
+  const service = createService();
+
+  const suggestions = service.suggestMatches({
+    unmatched_transactions: [
+      {
+        id: 'txn-weak',
+        tenant_id: 'tenant-1',
+        currency_code: 'USD',
+        amount_minor: 7500,
+        occurred_at: '2026-03-25',
+        reference_id: null,
+        counterparty_name: 'Unknown'
+      }
+    ],
+    matching_candidates: [
+      {
+        id: 'cand-weak-1',
+        tenant_id: 'tenant-1',
+        currency_code: 'USD',
+        amount_minor: 7500,
+        occurred_at: '2026-03-25',
+        reference_id: null,
+        counterparty_name: 'Other Counterparty'
+      }
+    ]
+  });
+
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0].suggested_candidate_id, null);
+  assert.equal(suggestions[0].auto_apply, false);
+  assert.equal(suggestions[0].authoritative, false);
+  assert.ok(suggestions[0].rationale.some((reason) => reason.includes('requires analyst confirmation')));
 });

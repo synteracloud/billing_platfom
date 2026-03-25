@@ -511,3 +511,83 @@ test('anomaly detection avoids false positives for stable activity and uses cons
     minimum_absolute_minor: 1000
   });
 });
+
+test('classification is deterministic, grounded, and falls back safely when evidence is missing', () => {
+  const analyticsService = new AnalyticsService(new LedgerRepository(), new ArRepository(), new ApRepository());
+
+  const classified = analyticsService.classifyTransaction({
+    transaction_description: 'Vendor bill for office utilities',
+    metadata: { merchant_name: 'Utility Co' }
+  });
+  assert.equal(classified.category, 'expense');
+  assert.equal(classified.deterministic_fallback_used, false);
+  assert.ok(classified.confidence_score >= 0.4);
+  assert.ok(classified.rationale.some((reason) => reason.includes('keyword:bill')));
+
+  const fallback = analyticsService.classifyTransaction({
+    transaction_description: null,
+    metadata: null,
+    ocr: { text: null, fields: null }
+  });
+  assert.equal(fallback.category, 'other');
+  assert.equal(fallback.deterministic_fallback_used, true);
+  assert.ok(fallback.confidence_score <= 0.4);
+});
+
+test('copilot suggestions are assistive-only and do not mutate ledger/ar/ap state', () => {
+  const tenantId = 'tenant-copilot-safety';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  createLedgerEntry(ledgerRepository, {
+    id: 'je-copilot-1',
+    tenant_id: tenantId,
+    entry_date: '2026-05-01',
+    lines: [
+      { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: 4500 },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 4500 }
+    ]
+  });
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-copilot-risk',
+    customer_id: 'cust-risk',
+    currency_code: 'USD',
+    issue_date: '2026-05-01',
+    due_date: '2026-05-10',
+    total_minor: 4500,
+    open_amount_minor: 4500,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-05-25T00:00:00.000Z'
+  });
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-copilot-hist',
+    customer_id: 'cust-risk',
+    currency_code: 'USD',
+    issue_date: '2026-04-01',
+    due_date: '2026-04-10',
+    total_minor: 1000,
+    open_amount_minor: 0,
+    paid_amount_minor: 1000,
+    status: 'closed',
+    updated_at: '2026-04-25T00:00:00.000Z'
+  });
+
+  const ledgerSnapshot = ledgerRepository.createSnapshot();
+  const invoicesBefore = arRepository.listInvoices(tenantId);
+  const billsBefore = apRepository.listBills(tenantId);
+
+  const report = analyticsService.getCopilotSuggestions(tenantId);
+  assert.equal(report.assistive_only, true);
+  assert.equal(report.authoritative, false);
+  assert.equal(report.no_automatic_actions, true);
+  assert.ok(report.suggestions.length >= 1);
+  assert.ok(report.suggestions.every((item) => item.authoritative === false));
+
+  assert.deepEqual(ledgerRepository.createSnapshot(), ledgerSnapshot);
+  assert.deepEqual(arRepository.listInvoices(tenantId), invoicesBefore);
+  assert.deepEqual(apRepository.listBills(tenantId), billsBefore);
+});
