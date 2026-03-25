@@ -41,6 +41,28 @@ export interface RunwayReport {
   based_on_horizon_days: number;
 }
 
+export interface AnomalyItem {
+  type: 'unusual_expense' | 'abnormal_cashflow_change' | 'outlier';
+  date: string;
+  amount_minor: number;
+  metric: 'outflow_minor' | 'net_minor' | 'abs_net_minor';
+  threshold_minor: number;
+  score: number;
+  note: string;
+}
+
+export interface AnomalyReport {
+  currency_code: string;
+  analysis_mode: 'read_only';
+  automated_actions_enabled: false;
+  thresholds: {
+    robust_z_score: number;
+    min_samples: number;
+    minimum_absolute_minor: number;
+  };
+  anomalies: AnomalyItem[];
+}
+
 @Injectable()
 export class AnalyticsService {
   constructor(
@@ -145,6 +167,87 @@ export class AnalyticsService {
     };
   }
 
+  getAnomalies(tenantId: string): AnomalyReport {
+    const cashflow = this.getCashflow(tenantId);
+    const byDay = cashflow.by_day;
+    const anomalies: AnomalyItem[] = [];
+
+    const robustZScore = 3.2;
+    const minSamples = 6;
+    const minimumAbsoluteMinor = 1000;
+
+    const outflows = byDay.map((point) => point.outflow_minor);
+    const netSeries = byDay.map((point) => point.net_minor);
+    const absNetSeries = byDay.map((point) => Math.abs(point.net_minor));
+
+    const outflowStats = this.computeRobustStats(outflows);
+    const absNetStats = this.computeRobustStats(absNetSeries);
+    const netChanges = byDay.slice(1).map((point, index) => point.net_minor - byDay[index].net_minor);
+    const netChangeStats = this.computeRobustStats(netChanges);
+
+    byDay.forEach((point, index) => {
+      if (byDay.length >= minSamples) {
+        const outflowScore = this.computeRobustScore(point.outflow_minor, outflowStats.median, outflowStats.mad);
+        if (point.outflow_minor >= minimumAbsoluteMinor && outflowScore >= robustZScore) {
+          anomalies.push({
+            type: 'unusual_expense',
+            date: point.date,
+            amount_minor: point.outflow_minor,
+            metric: 'outflow_minor',
+            threshold_minor: this.computeThreshold(outflowStats.median, outflowStats.mad, robustZScore),
+            score: Number(outflowScore.toFixed(2)),
+            note: 'Expense outflow is materially above normal baseline.'
+          });
+        }
+
+        const previousPoint = index > 0 ? byDay[index - 1] : null;
+        const netChangeMinor = previousPoint ? point.net_minor - previousPoint.net_minor : 0;
+        const netChangeScore = this.computeRobustScore(netChangeMinor, netChangeStats.median, netChangeStats.mad);
+        if (
+          previousPoint &&
+          Math.abs(netChangeMinor) >= minimumAbsoluteMinor &&
+          (Math.abs(netChangeScore) >= robustZScore ||
+            Math.abs(netChangeMinor) >= minimumAbsoluteMinor * 2.5)
+        ) {
+          anomalies.push({
+            type: 'abnormal_cashflow_change',
+            date: point.date,
+            amount_minor: netChangeMinor,
+            metric: 'net_minor',
+            threshold_minor: this.computeThreshold(netChangeStats.median, netChangeStats.mad, robustZScore),
+            score: Number(netChangeScore.toFixed(2)),
+            note: 'Net cashflow shift deviates significantly from expected pattern.'
+          });
+        }
+
+        const absNetScore = this.computeRobustScore(Math.abs(point.net_minor), absNetStats.median, absNetStats.mad);
+        if (Math.abs(point.net_minor) >= minimumAbsoluteMinor && absNetScore >= robustZScore + 0.4) {
+          anomalies.push({
+            type: 'outlier',
+            date: point.date,
+            amount_minor: point.net_minor,
+            metric: 'abs_net_minor',
+            threshold_minor: this.computeThreshold(absNetStats.median, absNetStats.mad, robustZScore + 0.4),
+            score: Number(absNetScore.toFixed(2)),
+            note: 'Cash movement magnitude is an outlier versus recent activity.'
+          });
+        }
+      }
+    });
+
+    return {
+      currency_code: cashflow.currency_code,
+      analysis_mode: 'read_only',
+      automated_actions_enabled: false,
+      thresholds: {
+        robust_z_score: robustZScore,
+        min_samples: minSamples,
+        minimum_absolute_minor: minimumAbsoluteMinor
+      },
+      anomalies
+    };
+  }
+
   private buildProjection(items: Array<{ date: string; amount_minor: number; currency_code: string }>): ProjectionReport {
     const byDay = new Map<string, number>();
     let currencyCode = 'USD';
@@ -163,5 +266,38 @@ export class AnalyticsService {
       total_minor: points.reduce((sum, item) => sum + item.amount_minor, 0),
       by_day: points
     };
+  }
+
+  private computeRobustStats(values: number[]): { median: number; mad: number } {
+    const median = this.computeMedian(values);
+    const deviations = values.map((value) => Math.abs(value - median));
+    const mad = this.computeMedian(deviations);
+    return { median, mad };
+  }
+
+  private computeMedian(values: number[]): number {
+    if (values.length === 0) {
+      return 0;
+    }
+
+    const sorted = [...values].sort((left, right) => left - right);
+    const middle = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+      return (sorted[middle - 1] + sorted[middle]) / 2;
+    }
+
+    return sorted[middle];
+  }
+
+  private computeRobustScore(value: number, median: number, mad: number): number {
+    if (mad === 0) {
+      return value === median ? 0 : Number.POSITIVE_INFINITY;
+    }
+
+    return (0.6745 * (value - median)) / mad;
+  }
+
+  private computeThreshold(median: number, mad: number, zScore: number): number {
+    return Math.round(median + (zScore * mad) / 0.6745);
   }
 }

@@ -28,4 +28,9 @@ export class AnalyticsController {
     const parsed = horizonDays ? Number(horizonDays) : undefined;
     return this.analyticsService.getRunway(request.tenant.id, parsed);
   }
+
+  @Get('anomalies')
+  getAnomalies(@Req() request: AuthenticatedRequest) {
+    return this.analyticsService.getAnomalies(request.tenant.id);
+  }
 }
