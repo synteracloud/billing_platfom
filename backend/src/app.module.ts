@@ -15,6 +15,7 @@ import { LedgerModule } from './modules/ledger/ledger.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
+import { StatementsModule } from './modules/statements/statements.module';
 import { TenantsModule } from './modules/tenants/module';
 import { UsersModule } from './modules/users/module';
 
@@ -35,6 +36,7 @@ import { UsersModule } from './modules/users/module';
     SubscriptionsModule,
     DocumentsModule,
     EventsModule,
+    StatementsModule,
     AuthModule
   ]
 })
