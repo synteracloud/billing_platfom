@@ -46,12 +46,14 @@ const payloadValidators: {
     requireNumber(payload.allocation_count, 'payload.allocation_count');
     requireNumber(payload.total_allocated_minor, 'payload.total_allocated_minor');
     requireString(payload.currency_code, 'payload.currency_code');
+    requireAllocationChanges(payload.allocation_changes, 'payload.allocation_changes');
   },
   'billing.payment.refunded.v1': (payload) => {
     requireString(payload.payment_id, 'payload.payment_id');
     requireString(payload.refunded_at, 'payload.refunded_at');
     requireNumber(payload.amount_minor, 'payload.amount_minor');
     requireString(payload.currency_code, 'payload.currency_code');
+    requireAllocationChanges(payload.allocation_changes, 'payload.allocation_changes');
   },
   'accounting.journal.posted.v1': (payload) => {
     requireString(payload.journal_entry_id, 'payload.journal_entry_id');
@@ -169,5 +171,20 @@ function requireString(value: unknown, field: string): void {
 function requireNumber(value: unknown, field: string): void {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new BadRequestException(`${field} must be a finite number`);
+  }
+}
+
+function requireAllocationChanges(value: unknown, field: string): void {
+  if (!Array.isArray(value)) {
+    throw new BadRequestException(`${field} must be an array`);
+  }
+
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== 'object') {
+      throw new BadRequestException(`${field}[${index}] must be an object`);
+    }
+
+    requireString((item as { invoice_id?: unknown }).invoice_id, `${field}[${index}].invoice_id`);
+    requireNumber((item as { allocated_delta_minor?: unknown }).allocated_delta_minor, `${field}[${index}].allocated_delta_minor`);
   }
 }
