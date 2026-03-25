@@ -3,6 +3,7 @@ import { TransactionsModule } from './common/transactions/transactions.module';
 import { ChartOfAccountsModule } from './modules/accounting/chart-of-accounts.module';
 import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
+import { ArModule } from './modules/ar/ar.module';
 import { DatabaseModule } from './database/database.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -35,7 +36,8 @@ import { UsersModule } from './modules/users/module';
     SubscriptionsModule,
     DocumentsModule,
     EventsModule,
-    AuthModule
+    AuthModule,
+    ArModule
   ]
 })
 export class AppModule implements NestModule {
@@ -62,6 +64,8 @@ export class AppModule implements NestModule {
       { path: 'api/v1/documents/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/events', method: RequestMethod.ALL },
       { path: 'api/v1/events/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/ar', method: RequestMethod.ALL },
+      { path: 'api/v1/ar/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }
