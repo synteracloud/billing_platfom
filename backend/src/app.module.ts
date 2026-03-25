@@ -19,6 +19,7 @@ import { SubscriptionsModule } from './modules/subscriptions/subscriptions.modul
 import { StatementsModule } from './modules/statements/statements.module';
 import { TenantsModule } from './modules/tenants/module';
 import { UsersModule } from './modules/users/module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -39,7 +40,8 @@ import { UsersModule } from './modules/users/module';
     EventsModule,
     AuthModule,
     ArModule,
-    ApModule
+    ApModule,
+    WebhooksModule
   ]
 })
 export class AppModule implements NestModule {
