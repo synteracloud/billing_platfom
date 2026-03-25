@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { DomainEventType } from '../entities/event.entity';
 import { EventConsumerIdempotencyService } from '../../idempotency/event-consumer-idempotency.service';
+import { DomainEventType } from '../entities/event.entity';
 import { EVENT_QUEUE_DRIVER } from './queue.constants';
 import { EventProcessingRegistry } from './event-processing.registry';
 import { QueueDriver, QueueJob } from './event-queue.types';
