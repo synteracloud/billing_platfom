@@ -1,23 +1,30 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { EventsService } from '../events/events.service';
 import {
   CreateReconciliationResultInput,
   ManualOverrideInput,
   ReconciliationResult
 } from './entities/manual-reconciliation.entity';
-import { ReconciliationRepository } from './reconciliation.repository';
+import { ManualMatchRecord, ReconciliationItem, ReconciliationRepository } from './reconciliation.repository';
+
+interface CreateManualMatchInput {
+  left_item_id: string;
+  right_item_id: string;
+  reason?: string | null;
+}
 
 @Injectable()
 export class ReconciliationService {
   constructor(
     private readonly reconciliationRepository: ReconciliationRepository,
-    private readonly eventsService: EventsService
+    @Optional() private readonly eventsService?: EventsService
   ) {}
 
   createSuggestion(input: CreateReconciliationResultInput): ReconciliationResult {
     const created = this.reconciliationRepository.createSuggestion(input);
 
-    this.eventsService.logMutation({
+    this.eventsService?.logMutation({
       tenant_id: input.tenant_id,
       entity_type: 'reconciliation_result',
       entity_id: created.id,
@@ -65,7 +72,7 @@ export class ReconciliationService {
       updated_at: now
     };
 
-    this.eventsService.logMutation({
+    this.eventsService?.logMutation({
       tenant_id: input.tenant_id,
       entity_type: 'reconciliation_result',
       entity_id: updated.id,
@@ -84,5 +91,89 @@ export class ReconciliationService {
     });
 
     return this.reconciliationRepository.save(updated);
+  }
+
+  getUnmatchedItems(tenantId: string, sourceType?: string, limit = 100): ReconciliationItem[] {
+    return this.reconciliationRepository
+      .listItems(tenantId)
+      .filter((item) => item.status === 'unmatched')
+      .filter((item) => !sourceType || item.source_type === sourceType)
+      .sort((a, b) => {
+        if (a.occurred_at !== b.occurred_at) {
+          return a.occurred_at.localeCompare(b.occurred_at);
+        }
+
+        return a.id.localeCompare(b.id);
+      })
+      .slice(0, Math.max(1, limit));
+  }
+
+  getMatches(tenantId: string, itemId?: string): ManualMatchRecord[] {
+    const matches = this.reconciliationRepository.listMatches(tenantId).sort((a, b) => {
+      if (a.created_at !== b.created_at) {
+        return a.created_at.localeCompare(b.created_at);
+      }
+
+      return a.id.localeCompare(b.id);
+    });
+
+    if (!itemId) {
+      return matches;
+    }
+
+    return matches.filter((match) => match.left_item_id === itemId || match.right_item_id === itemId);
+  }
+
+  createManualMatch(tenantId: string, input: CreateManualMatchInput): ManualMatchRecord {
+    if (input.left_item_id === input.right_item_id) {
+      throw new BadRequestException('manual match cannot use the same reconciliation item on both sides');
+    }
+
+    const left = this.reconciliationRepository.findItem(tenantId, input.left_item_id);
+    const right = this.reconciliationRepository.findItem(tenantId, input.right_item_id);
+    if (!left || !right) {
+      throw new BadRequestException('reconciliation item not found');
+    }
+
+    if (left.status !== 'unmatched' || right.status !== 'unmatched') {
+      throw new BadRequestException('manual matches can only be created for unmatched items');
+    }
+
+    if (left.currency_code !== right.currency_code) {
+      throw new BadRequestException('reconciliation item currency must match');
+    }
+
+    if (left.amount_minor !== right.amount_minor) {
+      throw new BadRequestException('reconciliation item amount must be equal');
+    }
+
+    const createdAt = new Date().toISOString();
+    this.reconciliationRepository.markItemAsMatched(tenantId, left.id, createdAt);
+    this.reconciliationRepository.markItemAsMatched(tenantId, right.id, createdAt);
+
+    const manualMatch: ManualMatchRecord = {
+      id: randomUUID(),
+      tenant_id: tenantId,
+      left_item_id: left.id,
+      right_item_id: right.id,
+      match_type: 'manual',
+      reason: input.reason?.trim() ? input.reason.trim() : null,
+      created_at: createdAt
+    };
+
+    this.eventsService?.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'reconciliation_result',
+      entity_id: manualMatch.id,
+      action: 'manual_match_created',
+      aggregate_version: 1,
+      payload: {
+        left_item_id: manualMatch.left_item_id,
+        right_item_id: manualMatch.right_item_id,
+        reason: manualMatch.reason
+      }
+    });
+
+    return this.reconciliationRepository.saveMatch(manualMatch);
   }
 }

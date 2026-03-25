@@ -216,10 +216,15 @@ export class MatchingEngine {
     }
 
     if (referenceMatch) {
-      const proximityBonus = Math.max(0, this.options.maxDateDistanceDays - Math.min(dateDistanceDays, this.options.maxDateDistanceDays));
+      if (dateDistanceDays > this.options.maxDateDistanceDays) {
+        return null;
+      }
+
+      const proximityBonus = this.options.maxDateDistanceDays - dateDistanceDays;
+      const amountBonus = from.remaining_minor === to.remaining_minor ? 10 : 0;
       return {
         to,
-        score: 1000 + proximityBonus,
+        score: 1000 + proximityBonus + amountBonus,
         dateDistanceDays,
         allocatableAmount,
         referenceMatch,
