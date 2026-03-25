@@ -101,6 +101,22 @@ const payloadValidators: {
     requireNumber(payload.amount_paid_minor, 'payload.amount_paid_minor');
     requireString(payload.currency_code, 'payload.currency_code');
   },
+  'payment.external.received.v1': (payload) => {
+    requireString(payload.external_payment_id, 'payload.external_payment_id');
+    requireString(payload.source_system, 'payload.source_system');
+    requireString(payload.received_at, 'payload.received_at');
+    requireNumber(payload.amount_minor, 'payload.amount_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
+    requireEnum(payload.status, 'payload.status', ['received'] as const);
+  },
+  'bank.transaction.synced.v1': (payload) => {
+    requireString(payload.bank_transaction_id, 'payload.bank_transaction_id');
+    requireString(payload.source_system, 'payload.source_system');
+    requireString(payload.synced_at, 'payload.synced_at');
+    requireNumber(payload.amount_minor, 'payload.amount_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
+    requireEnum(payload.direction, 'payload.direction', ['credit', 'debit'] as const);
+  },
   'accounting.journal.posted.v1': (payload) => {
     requireString(payload.journal_entry_id, 'payload.journal_entry_id');
     requireString(payload.source_type, 'payload.source_type');

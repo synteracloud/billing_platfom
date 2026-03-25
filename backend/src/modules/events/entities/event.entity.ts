@@ -13,6 +13,8 @@ export const CANONICAL_EVENT_TYPES = [
   'billing.bill.created.v1',
   'billing.bill.approved.v1',
   'billing.bill.paid.v1',
+  'payment.external.received.v1',
+  'bank.transaction.synced.v1',
   'accounting.journal.posted.v1',
   'accounting.journal.reversed.v1',
   'subledger.receivable.updated.v1',
@@ -35,6 +37,8 @@ export type DomainAggregateType =
   | 'payment'
   | 'payment_allocation'
   | 'bill'
+  | 'external_payment'
+  | 'bank_transaction'
   | 'journal_entry'
   | 'receivable_position'
   | 'payable_position'
@@ -73,26 +77,16 @@ export type InvoiceSentPayload = {
 
 export type InvoicePaidPayload = {
   invoice_id: string;
-  customer_id: string;
-  payment_status: 'paid';
-  amount_paid_minor: number;
-  amount_due_minor: number;
-  currency_code: string;
   paid_at: string;
+  amount_paid_minor: number;
+  currency_code: string;
+  payment_id: string;
 };
 
 export type InvoiceVoidedPayload = {
   invoice_id: string;
   voided_at: string;
   reason: string | null;
-};
-
-export type InvoicePaidPayload = {
-  invoice_id: string;
-  paid_at: string;
-  amount_paid_minor: number;
-  currency_code: string;
-  payment_id: string;
 };
 
 export type PaymentRecordedPayload = {
@@ -133,6 +127,11 @@ export type PaymentRefundedPayload = {
   allocation_changes: PaymentAllocationChange[];
 };
 
+export type PaymentAllocationChange = {
+  invoice_id: string;
+  allocated_delta_minor: number;
+};
+
 export type BillCreatedPayload = {
   bill_id: string;
   vendor_id?: string;
@@ -142,19 +141,6 @@ export type BillCreatedPayload = {
   currency_code: string;
   expense_classification: 'operating' | 'cost_of_goods_sold' | 'asset';
 };
-
-export type BillPaidPayload = {
-  bill_id: string;
-  paid_at: string;
-  amount_paid_minor: number;
-  currency_code: string;
-};
-
-export type PaymentAllocationChange = {
-  invoice_id: string;
-  allocated_delta_minor: number;
-};
-
 
 export type BillApprovedPayload = {
   bill_id: string;
@@ -169,6 +155,25 @@ export type BillPaidPayload = {
   bill_id: string;
   paid_at: string;
   amount_paid_minor: number;
+  currency_code: string;
+};
+
+export type PaymentExternalReceivedPayload = {
+  external_payment_id: string;
+  source_system: string;
+  received_at: string;
+  amount_minor: number;
+  currency_code: string;
+  status: 'received';
+};
+
+export type BankTransactionSyncedPayload = {
+  bank_transaction_id: string;
+  source_system: string;
+  synced_at: string;
+  amount_minor: number;
+  currency_code: string;
+  direction: 'credit' | 'debit';
 };
 
 export type JournalPostedPayload = {
@@ -262,6 +267,8 @@ export type DomainEventPayloadMap = {
   'billing.bill.created.v1': BillCreatedPayload;
   'billing.bill.approved.v1': BillApprovedPayload;
   'billing.bill.paid.v1': BillPaidPayload;
+  'payment.external.received.v1': PaymentExternalReceivedPayload;
+  'bank.transaction.synced.v1': BankTransactionSyncedPayload;
   'accounting.journal.posted.v1': JournalPostedPayload;
   'accounting.journal.reversed.v1': JournalReversedPayload;
   'subledger.receivable.updated.v1': ReceivableUpdatedPayload;
