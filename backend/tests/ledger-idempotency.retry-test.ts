@@ -114,18 +114,21 @@ async function main() {
     }
   });
 
-  const outOfOrderPosted = await ledgerService.postEvent('tenant-1', invoiceIssuedOutOfOrder.id, 'invoice-2-out-of-order');
-  let unsupportedEventMessage = '';
-  try {
-    await ledgerService.postEvent('tenant-1', invoiceCreated.id, 'invoice-2-created-attempt');
-  } catch (error) {
-    unsupportedEventMessage = (error as Error).message;
-  }
+  const createdPosted = await ledgerService.postEvent('tenant-1', invoiceCreated.id, 'invoice-2-created-attempt');
+  const createdRetry = await ledgerService.postEvent('tenant-1', invoiceCreated.id, 'invoice-2-created-attempt-retry');
+  assert.equal(createdPosted.id, createdRetry.id);
+  assert.deepEqual(
+    createdPosted.lines.map((line) => ({ direction: line.direction, account_code: line.account_code, amount_minor: line.amount_minor })),
+    [
+      { direction: 'debit', account_code: '1100', amount_minor: 500 },
+      { direction: 'credit', account_code: '4000', amount_minor: 500 }
+    ]
+  );
 
-  assert.match(unsupportedEventMessage, /Unsupported event_name/);
+  const outOfOrderPosted = await ledgerService.postEvent('tenant-1', invoiceIssuedOutOfOrder.id, 'invoice-2-out-of-order');
   const outOfOrderRetry = await ledgerService.postEvent('tenant-1', invoiceIssuedOutOfOrder.id, 'invoice-2-out-of-order-retry');
   assert.equal(outOfOrderPosted.id, outOfOrderRetry.id);
-  assert.equal(eventsService.listEvents('tenant-1', {}).filter((item: { type: string }) => item.type === 'accounting.journal.posted.v1').length, 3);
+  assert.equal(eventsService.listEvents('tenant-1', {}).filter((item: { type: string }) => item.type === 'accounting.journal.posted.v1').length, 4);
 
   const otherEvent = eventsService.logEvent({
     tenant_id: 'tenant-1',
