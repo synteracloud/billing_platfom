@@ -8,6 +8,7 @@ export class LedgerRepository {
   private readonly journalLines = new Map<string, JournalLineEntity>();
   private readonly idempotencyIndex = new Map<string, string>();
   private readonly requestIdempotencyIndex = new Map<string, string>();
+  private readonly journalEntryLineIds = new Map<string, string[]>();
 
   findBySourceEvent(tenantId: string, sourceEventId: string, ruleVersion: string): (JournalEntryEntity & { lines: JournalLineEntity[] }) | undefined {
     const existingId = this.idempotencyIndex.get(this.toIdempotencyKey(tenantId, sourceEventId, ruleVersion));
@@ -56,14 +57,20 @@ export class LedgerRepository {
       }
       seenLineNumbers.add(line.line_number);
       this.journalLines.set(line.id, this.freeze({ ...line }));
+      const existingLineIds = this.journalEntryLineIds.get(entry.id) ?? [];
+      existingLineIds.push(line.id);
+      this.journalEntryLineIds.set(entry.id, existingLineIds);
     }
 
     return this.findById(entry.tenant_id, entry.id)!;
   }
 
   listLines(tenantId: string, journalEntryId: string): JournalLineEntity[] {
-    return [...this.journalLines.values()]
-      .filter((line) => line.tenant_id === tenantId && line.journal_entry_id === journalEntryId)
+    const lineIds = this.journalEntryLineIds.get(journalEntryId) ?? [];
+
+    return lineIds
+      .map((lineId) => this.journalLines.get(lineId))
+      .filter((line): line is JournalLineEntity => Boolean(line && line.tenant_id === tenantId && line.journal_entry_id === journalEntryId))
       .sort((left, right) => left.line_number - right.line_number)
       .map((line) => this.freeze({ ...line }));
   }
@@ -82,12 +89,14 @@ export class LedgerRepository {
     journalLines: Map<string, JournalLineEntity>;
     idempotencyIndex: Map<string, string>;
     requestIdempotencyIndex: Map<string, string>;
+    journalEntryLineIds: Map<string, string[]>;
   } {
     return {
       journalEntries: new Map([...this.journalEntries.entries()].map(([id, entry]) => [id, this.freeze({ ...entry })])),
       journalLines: new Map([...this.journalLines.entries()].map(([id, line]) => [id, this.freeze({ ...line })])),
       idempotencyIndex: new Map(this.idempotencyIndex.entries()),
-      requestIdempotencyIndex: new Map(this.requestIdempotencyIndex.entries())
+      requestIdempotencyIndex: new Map(this.requestIdempotencyIndex.entries()),
+      journalEntryLineIds: new Map([...this.journalEntryLineIds.entries()].map(([entryId, lineIds]) => [entryId, [...lineIds]]))
     };
   }
 
@@ -96,11 +105,13 @@ export class LedgerRepository {
     journalLines: Map<string, JournalLineEntity>;
     idempotencyIndex: Map<string, string>;
     requestIdempotencyIndex: Map<string, string>;
+    journalEntryLineIds: Map<string, string[]>;
   }): void {
     this.journalEntries.clear();
     this.journalLines.clear();
     this.idempotencyIndex.clear();
     this.requestIdempotencyIndex.clear();
+    this.journalEntryLineIds.clear();
 
     for (const [id, entry] of snapshot.journalEntries.entries()) {
       this.journalEntries.set(id, this.freeze({ ...entry }));
@@ -116,6 +127,10 @@ export class LedgerRepository {
 
     for (const [key, entryId] of snapshot.requestIdempotencyIndex.entries()) {
       this.requestIdempotencyIndex.set(key, entryId);
+    }
+
+    for (const [entryId, lineIds] of snapshot.journalEntryLineIds.entries()) {
+      this.journalEntryLineIds.set(entryId, [...lineIds]);
     }
   }
 

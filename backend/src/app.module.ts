@@ -4,6 +4,7 @@ import { AuthMiddleware } from './modules/auth/auth.middleware';
 import { AuthModule } from './modules/auth/module';
 import { BankConnectorModule } from './modules/bank-connector/bank-connector.module';
 import { ArModule } from './modules/ar/ar.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { ApModule } from './modules/ap/ap.module';
 import { DatabaseModule } from './database/database.module';
 import { CustomersModule } from './modules/customers/customers.module';
@@ -46,6 +47,7 @@ import { ReconciliationModule } from './modules/reconciliation/reconciliation.mo
     AuthModule,
     ArModule,
     ApModule,
+    AnalyticsModule,
     WebhooksModule,
     ReconciliationModule
   ]
@@ -80,6 +82,8 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/analytics', method: RequestMethod.ALL },
+      { path: 'api/v1/analytics/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }

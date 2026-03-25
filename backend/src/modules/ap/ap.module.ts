@@ -11,6 +11,6 @@ import { ApService } from './ap.service';
   imports: [EventsModule, EventQueueModule, LedgerModule],
   controllers: [ApController],
   providers: [ApService, ApRepository, ApEventsHandler],
-  exports: [ApService]
+  exports: [ApService, ApRepository]
 })
 export class ApModule {}
