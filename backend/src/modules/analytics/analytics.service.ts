@@ -5,6 +5,32 @@ import { LedgerRepository } from '../ledger/ledger.repository';
 
 const CASH_ACCOUNT_CODES = new Set(['1000', '1010']);
 
+export type TransactionClassificationCategory =
+  | 'expense'
+  | 'revenue'
+  | 'asset'
+  | 'liability'
+  | 'transfer'
+  | 'equity'
+  | 'other';
+
+export interface ClassificationInput {
+  amount_minor?: number | null;
+  transaction_description?: string | null;
+  metadata?: Record<string, unknown> | null;
+  ocr?: {
+    text?: string | null;
+    fields?: Record<string, string | number | boolean | null> | null;
+  } | null;
+}
+
+export interface ClassificationResult {
+  category: TransactionClassificationCategory;
+  confidence_score: number;
+  rationale: string[];
+  deterministic_fallback_used: boolean;
+}
+
 export interface CashflowPoint {
   date: string;
   inflow_minor: number;
