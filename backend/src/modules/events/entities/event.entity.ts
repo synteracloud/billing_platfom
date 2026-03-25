@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 export const CANONICAL_EVENT_TYPES = [
   'billing.invoice.created.v1',
   'billing.invoice.issued.v1',
+  'billing.invoice.paid.v1',
   'billing.invoice.voided.v1',
   'billing.payment.recorded.v1',
   'billing.payment.settled.v1',
@@ -42,7 +43,7 @@ export type InvoiceCreatedPayload = {
   invoice_id: string;
   customer_id: string;
   invoice_number: string;
-  status: 'draft' | 'issued' | 'partially_paid' | 'paid' | 'void';
+  status: 'draft' | 'issued' | 'paid' | 'void';
   total_minor: number;
   currency_code: string;
 };
@@ -59,6 +60,14 @@ export type InvoiceVoidedPayload = {
   invoice_id: string;
   voided_at: string;
   reason: string | null;
+};
+
+export type InvoicePaidPayload = {
+  invoice_id: string;
+  paid_at: string;
+  amount_paid_minor: number;
+  currency_code: string;
+  payment_id: string;
 };
 
 export type PaymentRecordedPayload = {
@@ -78,6 +87,8 @@ export type PaymentSettledPayload = {
 
 export type PaymentAllocatedPayload = {
   payment_id: string;
+  customer_id: string;
+  amount_minor: number;
   allocation_count: number;
   total_allocated_minor: number;
   currency_code: string;
@@ -171,6 +182,7 @@ export type AuditPayload = {
 export type DomainEventPayloadMap = {
   'billing.invoice.created.v1': InvoiceCreatedPayload;
   'billing.invoice.issued.v1': InvoiceIssuedPayload;
+  'billing.invoice.paid.v1': InvoicePaidPayload;
   'billing.invoice.voided.v1': InvoiceVoidedPayload;
   'billing.payment.recorded.v1': PaymentRecordedPayload;
   'billing.payment.settled.v1': PaymentSettledPayload;

@@ -7,6 +7,8 @@ import { IdempotencyRepository } from '../src/modules/idempotency/idempotency.re
 import { IdempotencyService } from '../src/modules/idempotency/idempotency.service';
 import { EventsRepository } from '../src/modules/events/events.repository';
 import { EventsService } from '../src/modules/events/events.service';
+import { EventQueuePublisher } from '../src/modules/events/queue/event-queue.publisher';
+import { InMemoryQueueDriver } from '../src/modules/events/queue/in-memory-queue.driver';
 import { InvoicesRepository } from '../src/modules/invoices/invoices.repository';
 import { InvoicesService } from '../src/modules/invoices/invoices.service';
 import { LedgerRepository } from '../src/modules/ledger/ledger.repository';
@@ -19,7 +21,8 @@ async function main() {
   const idempotencyService = new IdempotencyService(idempotencyRepository);
   const eventConsumerIdempotencyService = new EventConsumerIdempotencyService(idempotencyService);
   const eventsRepository = new EventsRepository();
-  const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService);
+  const eventQueuePublisher = new EventQueuePublisher(new InMemoryQueueDriver());
+  const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventQueuePublisher);
   const transactionManager = new FinancialTransactionManager();
   const customersService = new CustomersService(new CustomersRepository());
   const invoicesRepository = new InvoicesRepository();
