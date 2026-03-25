@@ -10,6 +10,7 @@ import { JournalLineDirection, JournalLineEntity } from './entities/journal-line
 import { LedgerRepository } from './ledger.repository';
 
 const SUPPORTED_EVENT_NAMES = new Set([
+  'billing.invoice.created.v1',
   'billing.invoice.issued.v1',
   'billing.payment.settled.v1',
   'billing.payment.refunded.v1',
@@ -27,6 +28,10 @@ const EVENT_REQUIRED_ACCOUNT_CODES = new Map(
 );
 
 const EVENT_DIRECTIONAL_ACCOUNT_RULES = new Map<string, Array<{ direction: JournalLineDirection; codes: string[] }>>([
+  ['billing.invoice.created.v1', [
+    { direction: 'debit', codes: ['1100'] },
+    { direction: 'credit', codes: ['4000', '2100'] }
+  ]],
   ['billing.invoice.issued.v1', [
     { direction: 'debit', codes: ['1100'] },
     { direction: 'credit', codes: ['4000', '2100'] }
@@ -315,6 +320,24 @@ export class LedgerService {
     const eventType = event.type as string;
 
     switch (eventType) {
+      case 'billing.invoice.created.v1': {
+        const payload = event.payload as InvoiceCreatedPayload;
+        return {
+          tenant_id: event.tenant_id,
+          source_type: 'invoice',
+          source_id: payload.invoice_id,
+          source_event_id: event.id,
+          event_name: eventType,
+          rule_version: ruleVersion,
+          entry_date: event.occurred_at.slice(0, 10),
+          currency_code: payload.currency_code,
+          description: `Invoice created ${payload.invoice_id}`,
+          entries: [
+            this.createPostingLine('1100', 'Accounts Receivable', 'debit', payload.total_minor, payload.currency_code),
+            this.createPostingLine('4000', 'Revenue', 'credit', payload.total_minor, payload.currency_code)
+          ]
+        };
+      }
       case 'billing.invoice.issued.v1': {
         const payload = event.payload as InvoiceIssuedPayload;
         return {

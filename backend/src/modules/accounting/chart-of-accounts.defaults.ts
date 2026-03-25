@@ -77,6 +77,26 @@ export const DEFAULT_CHART_OF_ACCOUNTS: AccountDefinition[] = [
 
 export const POSTING_RULE_EXPECTATIONS: PostingRuleExpectation[] = [
   {
+    eventType: 'billing.invoice.created.v1',
+    requiredAccounts: [
+      {
+        key: 'accounts_receivable',
+        allowedTypes: ['asset'],
+        rationale: 'Invoice creation debits accounts receivable.'
+      },
+      {
+        key: 'revenue',
+        allowedTypes: ['revenue'],
+        rationale: 'Invoice creation credits revenue.'
+      },
+      {
+        key: 'sales_tax_payable',
+        allowedTypes: ['liability'],
+        rationale: 'Taxable invoices can credit tax liability.'
+      }
+    ]
+  },
+  {
     eventType: 'billing.invoice.issued.v1',
     requiredAccounts: [
       {
