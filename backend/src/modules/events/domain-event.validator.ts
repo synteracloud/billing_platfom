@@ -25,6 +25,13 @@ const payloadValidators: {
     requireNumber(payload.total_minor, 'payload.total_minor');
     requireString(payload.currency_code, 'payload.currency_code');
   },
+  'billing.invoice.paid.v1': (payload) => {
+    requireString(payload.invoice_id, 'payload.invoice_id');
+    requireString(payload.paid_at, 'payload.paid_at');
+    requireNumber(payload.amount_paid_minor, 'payload.amount_paid_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
+    requireString(payload.payment_id, 'payload.payment_id');
+  },
   'billing.invoice.voided.v1': (payload) => {
     requireString(payload.invoice_id, 'payload.invoice_id');
     requireString(payload.voided_at, 'payload.voided_at');
@@ -43,6 +50,8 @@ const payloadValidators: {
   },
   'billing.payment.allocated.v1': (payload) => {
     requireString(payload.payment_id, 'payload.payment_id');
+    requireString(payload.customer_id, 'payload.customer_id');
+    requireNumber(payload.amount_minor, 'payload.amount_minor');
     requireNumber(payload.allocation_count, 'payload.allocation_count');
     requireNumber(payload.total_allocated_minor, 'payload.total_allocated_minor');
     requireString(payload.currency_code, 'payload.currency_code');
