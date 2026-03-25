@@ -928,3 +928,36 @@
 
 **Key indexes**
 - `INDEX (tenant_id, currency)`
+
+### 2.12 `bill`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `vendor_id UUID NOT NULL`
+- `total_amount BIGINT NOT NULL` (minor units)
+- `currency CHAR(3) NOT NULL`
+- `status TEXT NOT NULL` (`draft`, `issued`, `approved`, `due`, `partially_paid`, `paid`, `void`)
+- `issued_at TIMESTAMPTZ NULL`
+- `due_at TIMESTAMPTZ NULL`
+- `created_at TIMESTAMPTZ NOT NULL`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, id)` (tenant-safe references)
+
+**Key indexes**
+- `INDEX (tenant_id, status)`
+- `INDEX (tenant_id, vendor_id)`
+- `INDEX (tenant_id, due_at)`
+
+**Checks**
+- `total_amount >= 0`
+- `status IN ('draft', 'issued', 'approved', 'due', 'partially_paid', 'paid', 'void')`
+- draft lifecycle guard: draft bills must not have `issued_at`
+- temporal guard: `due_at >= issued_at` when both are present
