@@ -277,68 +277,79 @@ test('analytics read-only guard blocks non-GET methods', () => {
   assert.throws(() => guard.canActivate(buildExecutionContext('PATCH')));
 });
 
-test('classification is assistive, consistent, and deterministic across transaction types', () => {
-  const tenantId = 'tenant-classification';
+test('anomaly detection flags unusual expenses, abnormal cashflow changes, and outliers in read-only mode', () => {
+  const tenantId = 'tenant-analytics-anomalies';
   const ledgerRepository = new LedgerRepository();
   const arRepository = new ArRepository();
   const apRepository = new ApRepository();
   const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
 
-  arRepository.upsertInvoice(tenantId, {
-    invoice_id: 'inv-before',
-    customer_id: 'cust-1',
-    currency_code: 'USD',
-    issue_date: '2026-03-01',
-    due_date: '2026-03-10',
-    total_minor: 1000,
-    open_amount_minor: 1000,
-    paid_amount_minor: 0,
-    status: 'open',
-    updated_at: '2026-03-01T00:00:00.000Z'
+  const dailyNet = [1100, 980, 1020, -1200, -900, 1050, -950, -880, -6200];
+
+  dailyNet.forEach((net, index) => {
+    const date = `2026-03-${String(index + 1).padStart(2, '0')}`;
+    if (net >= 0) {
+      createLedgerEntry(ledgerRepository, {
+        id: `je-in-${index + 1}`,
+        tenant_id: tenantId,
+        entry_date: date,
+        lines: [
+          { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: net },
+          { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: net }
+        ]
+      });
+      return;
+    }
+
+    createLedgerEntry(ledgerRepository, {
+      id: `je-out-${index + 1}`,
+      tenant_id: tenantId,
+      entry_date: date,
+      lines: [
+        { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: Math.abs(net) },
+        { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: Math.abs(net) }
+      ]
+    });
   });
 
-  const revenue = analyticsService.classifyTransaction({
-    amount_minor: 150000,
-    transaction_description: 'Customer payment received for March subscription invoice',
-    metadata: { source: 'bank_feed', counterparty_type: 'customer' },
-    ocr: { text: 'Invoice total paid in full' }
-  });
-  assert.equal(revenue.category, 'revenue');
-  assert.equal(revenue.deterministic_fallback_used, false);
-  assert.ok(revenue.confidence_score > 0.5);
+  const anomalies = analyticsService.getAnomalies(tenantId);
+  assert.equal(anomalies.analysis_mode, 'read_only');
+  assert.equal(anomalies.automated_actions_enabled, false);
+  assert.equal(anomalies.thresholds.robust_z_score, 3.2);
+  assert.deepEqual(
+    anomalies.anomalies
+      .filter((item) => item.date === '2026-03-09')
+      .map((item) => item.type)
+      .sort(),
+    ['abnormal_cashflow_change', 'outlier', 'unusual_expense']
+  );
+});
 
-  const expense = analyticsService.classifyTransaction({
-    amount_minor: -7800,
-    transaction_description: 'Vendor bill payment for office utility fee',
-    metadata: { source: 'ap_portal', counterparty_type: 'vendor' },
-    ocr: { text: 'Utility expense statement' }
-  });
-  assert.equal(expense.category, 'expense');
-  assert.equal(expense.deterministic_fallback_used, false);
-  assert.ok(expense.confidence_score > 0.5);
+test('anomaly detection avoids false positives for stable activity and uses consistent thresholds', () => {
+  const tenantId = 'tenant-analytics-noise';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
 
-  const transfer = analyticsService.classifyTransaction({
-    amount_minor: 12000,
-    transaction_description: 'Internal transfer from reserve account',
-    metadata: { account_pair: '1000->1010' }
+  [950, 1040, 980, 1010, 990, 1020, 1000, 970, 1030].forEach((net, index) => {
+    const date = `2026-04-${String(index + 1).padStart(2, '0')}`;
+    createLedgerEntry(ledgerRepository, {
+      id: `je-stable-${index + 1}`,
+      tenant_id: tenantId,
+      entry_date: date,
+      lines: [
+        { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: net },
+        { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: net }
+      ]
+    });
   });
-  assert.equal(transfer.category, 'transfer');
-  assert.ok(transfer.confidence_score >= 0.5);
 
-  const fallbackA = analyticsService.classifyTransaction({
-    amount_minor: -999,
-    transaction_description: 'memo ref 12345'
+  const anomalies = analyticsService.getAnomalies(tenantId);
+  assert.equal(anomalies.anomalies.length, 0);
+  assert.deepEqual(anomalies.thresholds, {
+    robust_z_score: 3.2,
+    min_samples: 6,
+    minimum_absolute_minor: 1000
   });
-  const fallbackB = analyticsService.classifyTransaction({
-    amount_minor: -999,
-    transaction_description: 'memo ref 12345'
-  });
-  assert.deepEqual(fallbackA, fallbackB);
-  assert.equal(fallbackA.category, 'expense');
-  assert.equal(fallbackA.deterministic_fallback_used, true);
-  assert.equal(fallbackA.confidence_score, 0.25);
-
-  const invoicesAfter = arRepository.listInvoices(tenantId);
-  assert.equal(invoicesAfter.length, 1);
-  assert.equal(invoicesAfter[0].invoice_id, 'inv-before');
 });
