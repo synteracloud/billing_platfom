@@ -23,6 +23,25 @@ export interface BillDueTracking {
   overdue: BillDueState[];
 }
 
+export interface InflowProjectionLine {
+  invoice_id: string;
+  due_date: string | null;
+  projected_payment_date: string;
+  amount_due_minor: number;
+  payment_probability: number;
+  projected_amount_minor: number;
+  days_overdue: number;
+}
+
+export interface ArInflowProjection {
+  as_of_date: string;
+  delay_days: number;
+  outstanding_ar_minor: number;
+  projected_inflow_minor: number;
+  projection_accuracy_ratio: number;
+  projections: InflowProjectionLine[];
+}
+
 function toUtcDate(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
 }
@@ -31,6 +50,101 @@ function calculateDaysPastDue(dueDate: string, asOfDate: string): number {
   const dueDateUtc = toUtcDate(dueDate);
   const asOfUtc = toUtcDate(asOfDate);
   return Math.floor((asOfUtc.getTime() - dueDateUtc.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function addDaysUtc(dateString: string, days: number): string {
+  const date = toUtcDate(dateString);
+  const safeDays = Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 0;
+  date.setUTCDate(date.getUTCDate() + safeDays);
+  return date.toISOString().slice(0, 10);
+}
+
+function clampProbability(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+type ArInvoiceLike = {
+  id?: string;
+  invoice_id?: string;
+  status: InvoiceEntity['status'];
+  due_date: string | null;
+  amount_due_minor: number;
+  payment_probability?: number;
+};
+
+export function buildArInflowProjection(
+  invoices: ArInvoiceLike[],
+  options: {
+    asOfDate: string;
+    delayDays?: number;
+    defaultPaymentProbability?: number;
+  }
+): ArInflowProjection {
+  const delayDays = Number.isFinite(options.delayDays) ? Math.max(0, Math.floor(options.delayDays as number)) : 0;
+  const defaultProbability = clampProbability(options.defaultPaymentProbability ?? 1);
+
+  const eligibleInvoices = invoices.filter(
+    (invoice) =>
+      invoice.amount_due_minor > 0 && invoice.status !== 'draft' && invoice.status !== 'void' && invoice.status !== 'paid' && Boolean(invoice.id ?? invoice.invoice_id)
+  );
+
+  const projections = eligibleInvoices.map<InflowProjectionLine>((invoice) => {
+    const invoiceId = (invoice.id ?? invoice.invoice_id) as string;
+    const dueDate = invoice.due_date;
+    const daysOverdue = dueDate ? Math.max(0, calculateDaysPastDue(dueDate, options.asOfDate)) : 0;
+    const overdueDecay = Math.max(0.25, 1 - daysOverdue / 180);
+    const baseProbability = clampProbability(invoice.payment_probability ?? defaultProbability);
+    const effectiveProbability = clampProbability(baseProbability * overdueDecay);
+    const projectedAmount = Math.min(invoice.amount_due_minor, Math.floor(invoice.amount_due_minor * effectiveProbability));
+    const baseProjectionDate = dueDate ?? options.asOfDate;
+
+    return {
+      invoice_id: invoiceId,
+      due_date: dueDate,
+      projected_payment_date: addDaysUtc(baseProjectionDate, delayDays),
+      amount_due_minor: invoice.amount_due_minor,
+      payment_probability: effectiveProbability,
+      projected_amount_minor: projectedAmount,
+      days_overdue: daysOverdue,
+    };
+  });
+
+  const outstandingAr = projections.reduce((sum, line) => sum + line.amount_due_minor, 0);
+  const projectedInflow = projections.reduce((sum, line) => sum + line.projected_amount_minor, 0);
+
+  return {
+    as_of_date: options.asOfDate,
+    delay_days: delayDays,
+    outstanding_ar_minor: outstandingAr,
+    projected_inflow_minor: projectedInflow,
+    projection_accuracy_ratio: outstandingAr === 0 ? 1 : projectedInflow / outstandingAr,
+    projections,
+  };
+}
+
+export function validateArInflowProjectionAccuracy(
+  projection: ArInflowProjection,
+  actualCollectedMinorByInvoiceId: Record<string, number>
+): { absolute_error_minor: number; accuracy_ratio: number } {
+  const { absoluteError, projectedTotal } = projection.projections.reduce(
+    (acc, line) => {
+      const actual = Math.max(0, actualCollectedMinorByInvoiceId[line.invoice_id] ?? 0);
+      return {
+        projectedTotal: acc.projectedTotal + line.projected_amount_minor,
+        absoluteError: acc.absoluteError + Math.abs(line.projected_amount_minor - actual),
+      };
+    },
+    { projectedTotal: 0, absoluteError: 0 }
+  );
+
+  return {
+    absolute_error_minor: absoluteError,
+    accuracy_ratio: projectedTotal === 0 ? (absoluteError === 0 ? 1 : 0) : Math.max(0, 1 - absoluteError / projectedTotal),
+  };
 }
 
 type BillLikeState = {
