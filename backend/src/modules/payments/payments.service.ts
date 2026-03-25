@@ -3,6 +3,7 @@ import { FinancialStateValidator } from '../../common/transactions/financial-sta
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { CustomersService } from '../customers/customers.service';
 import { EventsService } from '../events/events.service';
+import { IdempotencyService } from '../idempotency/idempotency.service';
 import { InvoicesRepository } from '../invoices/invoices.repository';
 import { InvoiceEntity } from '../invoices/entities/invoice.entity';
 import { AllocatePaymentDto } from './dto/allocate-payment.dto';
@@ -22,6 +23,7 @@ export class PaymentsService {
     private readonly invoicesRepository: InvoicesRepository,
     private readonly customersService: CustomersService,
     private readonly eventsService: EventsService,
+    private readonly idempotencyService: IdempotencyService,
     private readonly transactionManager: FinancialTransactionManager
   ) {}
 
@@ -30,7 +32,8 @@ export class PaymentsService {
   }
 
   async createPayment(tenantId: string, data: CreatePaymentDto, idempotencyKey?: string): Promise<PaymentDetails> {
-    return this.transactionManager.wrapper(async () => {
+    const key = this.requireIdempotencyKey(idempotencyKey, 'create payment');
+    return this.runIdempotentPaymentOperation(tenantId, 'payments:create', key, () => this.transactionManager.wrapper(async () => {
       this.validateCreatePayload(data);
       this.customersService.getCustomer(tenantId, data.customer_id);
 
@@ -81,7 +84,7 @@ export class PaymentsService {
       });
 
       return this.getPayment(tenantId, payment.id);
-    }, this.financialParticipants());
+    }, this.financialParticipants()));
   }
 
   getPayment(tenantId: string, paymentId: string): PaymentDetails {
@@ -94,7 +97,8 @@ export class PaymentsService {
   }
 
   async allocatePayment(tenantId: string, paymentId: string, data: AllocatePaymentDto, idempotencyKey?: string): Promise<PaymentDetails> {
-    return this.transactionManager.wrapper(async () => {
+    const key = this.requireIdempotencyKey(idempotencyKey, 'allocate payment');
+    return this.runIdempotentPaymentOperation(tenantId, `payments:${paymentId}:allocate`, key, () => this.transactionManager.wrapper(async () => {
       const payment = this.requireAllocatablePayment(tenantId, paymentId);
       this.validateAllocatePayload(data);
 
@@ -161,7 +165,7 @@ export class PaymentsService {
       });
 
       return updatedPayment;
-    }, this.financialParticipants());
+    }, this.financialParticipants()));
   }
 
   async voidPayment(tenantId: string, paymentId: string, idempotencyKey?: string): Promise<PaymentDetails> {
@@ -403,6 +407,40 @@ export class PaymentsService {
       if (!Number.isFinite(allocation.allocated_minor) || allocation.allocated_minor <= 0) {
         throw new BadRequestException('allocated_minor must be greater than 0');
       }
+    }
+  }
+
+  private requireIdempotencyKey(idempotencyKey: string | undefined, operation: string): string {
+    const normalizedKey = idempotencyKey?.trim();
+    if (!normalizedKey) {
+      throw new BadRequestException(`idempotency_key is required to ${operation}`);
+    }
+
+    return normalizedKey;
+  }
+
+  private async runIdempotentPaymentOperation<T>(tenantId: string, operationScope: string, key: string, handler: () => Promise<T>): Promise<T> {
+    const scope = `${tenantId}:${operationScope}`;
+    const begin = this.idempotencyService.begin(scope, key);
+
+    if (begin.state === 'completed') {
+      return begin.record.response?.body as T;
+    }
+
+    if (begin.state === 'in_progress') {
+      const completed = await this.idempotencyService.waitForCompletion(scope, key);
+      if (completed?.response) {
+        return completed.response.body as T;
+      }
+    }
+
+    try {
+      const result = await handler();
+      this.idempotencyService.complete(scope, key, { status_code: 200, body: result });
+      return result;
+    } catch (error) {
+      this.idempotencyService.fail(scope, key);
+      throw error;
     }
   }
 }
