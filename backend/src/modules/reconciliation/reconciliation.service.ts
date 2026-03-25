@@ -1,62 +1,88 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { EventsService } from '../events/events.service';
 import {
-  ReconciliationItem,
-  ReconciliationMatch,
-  ReconciliationRepository
-} from './reconciliation.repository';
+  CreateReconciliationResultInput,
+  ManualOverrideInput,
+  ReconciliationResult
+} from './entities/manual-reconciliation.entity';
+import { ReconciliationRepository } from './reconciliation.repository';
 
 @Injectable()
 export class ReconciliationService {
-  constructor(private readonly reconciliationRepository: ReconciliationRepository) {}
+  constructor(
+    private readonly reconciliationRepository: ReconciliationRepository,
+    private readonly eventsService: EventsService
+  ) {}
 
-  getUnmatchedItems(tenantId: string, sourceType?: string, limit = 100): ReconciliationItem[] {
-    return this.reconciliationRepository.listUnmatchedItems(tenantId, sourceType, limit);
-  }
+  createSuggestion(input: CreateReconciliationResultInput): ReconciliationResult {
+    const created = this.reconciliationRepository.createSuggestion(input);
 
-  getMatches(tenantId: string, itemId?: string): ReconciliationMatch[] {
-    return this.reconciliationRepository.listMatches(tenantId, itemId);
-  }
-
-  createManualMatch(
-    tenantId: string,
-    params: { left_item_id: string; right_item_id: string; reason?: string | null }
-  ): ReconciliationMatch {
-    const leftItemId = params.left_item_id?.trim();
-    const rightItemId = params.right_item_id?.trim();
-
-    if (!leftItemId || !rightItemId) {
-      throw new BadRequestException('left_item_id and right_item_id are required');
-    }
-
-    if (leftItemId === rightItemId) {
-      throw new BadRequestException('cannot create manual match with the same reconciliation item');
-    }
-
-    const leftItem = this.reconciliationRepository.findItem(tenantId, leftItemId);
-    const rightItem = this.reconciliationRepository.findItem(tenantId, rightItemId);
-    if (!leftItem || !rightItem) {
-      throw new NotFoundException('reconciliation item not found');
-    }
-
-    if (leftItem.status !== 'unmatched' || rightItem.status !== 'unmatched') {
-      throw new BadRequestException('manual match can only be created for unmatched reconciliation items');
-    }
-
-    if (leftItem.currency_code !== rightItem.currency_code) {
-      throw new BadRequestException('manual match currency must match across reconciliation items');
-    }
-
-    if (leftItem.amount_minor !== rightItem.amount_minor) {
-      throw new BadRequestException('manual match amount must be equal across reconciliation items');
-    }
-
-    return this.reconciliationRepository.createManualMatch(tenantId, {
-      id: randomUUID(),
-      left_item_id: leftItem.id,
-      right_item_id: rightItem.id,
-      reason: params.reason ?? null,
-      created_at: new Date().toISOString()
+    this.eventsService.logMutation({
+      tenant_id: input.tenant_id,
+      entity_type: 'reconciliation_result',
+      entity_id: created.id,
+      action: 'suggested',
+      aggregate_version: 1,
+      correlation_id: created.reconciliation_run_id,
+      payload: {
+        reconciliation_run_id: created.reconciliation_run_id,
+        source_record_id: created.source_record_id,
+        system_suggested_candidate_id: created.system_suggested_candidate_id,
+        candidate_ids: created.candidates.map((candidate) => candidate.candidate_id)
+      }
     });
+
+    return created;
+  }
+
+  applyManualOverride(input: ManualOverrideInput): ReconciliationResult {
+    const result = this.reconciliationRepository.findById(input.tenant_id, input.reconciliation_result_id);
+    if (!result) {
+      throw new BadRequestException('reconciliation_result not found');
+    }
+
+    const selectedCandidate = result.candidates.find((candidate) => candidate.candidate_id === input.selected_candidate_id);
+    if (!selectedCandidate) {
+      throw new BadRequestException('selected_candidate_id must exist in reconciliation candidates');
+    }
+
+    if (result.system_suggested_candidate_id === input.selected_candidate_id) {
+      throw new BadRequestException('selected_candidate_id must override the system suggestion');
+    }
+
+    if (input.reason.trim().length === 0) {
+      throw new BadRequestException('reason is required');
+    }
+
+    const now = new Date().toISOString();
+    const updated: ReconciliationResult = {
+      ...result,
+      selected_candidate_id: input.selected_candidate_id,
+      status: 'manually_matched',
+      override_reason: input.reason,
+      overridden_by: input.user_id,
+      overridden_at: now,
+      updated_at: now
+    };
+
+    this.eventsService.logMutation({
+      tenant_id: input.tenant_id,
+      entity_type: 'reconciliation_result',
+      entity_id: updated.id,
+      action: 'manual_override_applied',
+      aggregate_version: 2,
+      actor_type: 'user',
+      actor_id: input.user_id,
+      correlation_id: input.correlation_id ?? updated.reconciliation_run_id,
+      payload: {
+        reconciliation_run_id: updated.reconciliation_run_id,
+        source_record_id: updated.source_record_id,
+        system_suggested_candidate_id: updated.system_suggested_candidate_id,
+        selected_candidate_id: updated.selected_candidate_id,
+        override_reason: updated.override_reason
+      }
+    });
+
+    return this.reconciliationRepository.save(updated);
   }
 }

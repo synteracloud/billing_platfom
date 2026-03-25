@@ -3,13 +3,7 @@ const path = require('path');
 const ts = require('/root/.nvm/versions/node/v22.21.1/lib/node_modules/typescript');
 
 const sourceFiles = [
-  'src/modules/reconciliation/reconciliation.repository.ts',
-  'src/modules/reconciliation/reconciliation.service.ts',
-  'src/modules/ar/ar.repository.ts',
-  'src/modules/ap/ap.repository.ts',
-  'src/modules/ledger/entities/journal-entry.entity.ts',
-  'src/modules/ledger/entities/journal-line.entity.ts',
-  'src/modules/ledger/ledger.repository.ts'
+  'src/modules/reconciliation/matching-engine.ts'
 ];
 
 const srcRoot = path.resolve(__dirname);
@@ -37,4 +31,4 @@ for (const relativeFile of sourceFiles) {
 }
 
 require('node:test');
-require('./test/reconciliation.api.spec.js');
+require('./test/reconciliation.matching.spec.js');
