@@ -120,7 +120,6 @@ export class PaymentsService {
         }
       }
 
-      const touchedInvoiceIds = new Set<string>();
       let allocationVersion = this.paymentsRepository.listAllocationsByPayment(tenantId, paymentId).length;
       for (const item of data.allocations) {
         const createdAllocation = this.paymentsRepository.createAllocation({
@@ -141,14 +140,27 @@ export class PaymentsService {
           correlation_id: paymentId,
           payload: { invoice_id: item.invoice_id, after: createdAllocation }
         });
-        touchedInvoiceIds.add(item.invoice_id);
+
+        this.eventsService.logEvent({
+          tenant_id: tenantId,
+          type: 'billing.invoice.payment_allocation_referenced.v1',
+          aggregate_type: 'invoice',
+          aggregate_id: item.invoice_id,
+          aggregate_version: Math.max(1, allocationVersion),
+          correlation_id: paymentId,
+          idempotency_key: idempotencyKey ? `${idempotencyKey}:invoice-ref:${item.invoice_id}:${allocationVersion}` : undefined,
+          payload: {
+            invoice_id: item.invoice_id,
+            payment_id: paymentId,
+            allocation_id: createdAllocation.id,
+            allocated_minor: item.allocated_minor,
+            allocation_date: createdAllocation.allocation_date,
+            currency_code: payment.currency
+          }
+        });
       }
 
       this.refreshPaymentAllocationBalance(tenantId, paymentId, paymentId);
-
-      for (const invoiceId of touchedInvoiceIds) {
-        this.syncInvoicePaymentStatus(tenantId, invoiceId, paymentId);
-      }
 
       const updatedPayment = this.getPayment(tenantId, paymentId);
       this.transactionManager.runAfterCommit(() => {
@@ -217,9 +229,23 @@ export class PaymentsService {
         payload: { before: payment, after: updatedPayment }
       });
 
-      const touchedInvoiceIds = new Set(removedAllocations.map((allocation) => allocation.invoice_id));
-      for (const invoiceId of touchedInvoiceIds) {
-        this.syncInvoicePaymentStatus(tenantId, invoiceId, paymentId);
+      for (const allocation of removedAllocations) {
+        this.eventsService.logEvent({
+          tenant_id: tenantId,
+          type: 'billing.invoice.payment_allocation_reversed.v1',
+          aggregate_type: 'invoice',
+          aggregate_id: allocation.invoice_id,
+          aggregate_version: 1,
+          correlation_id: paymentId,
+          idempotency_key: idempotencyKey ? `${idempotencyKey}:invoice-ref-reversed:${allocation.id}` : undefined,
+          payload: {
+            invoice_id: allocation.invoice_id,
+            payment_id: paymentId,
+            allocation_id: allocation.id,
+            reversed_minor: allocation.allocated_minor,
+            currency_code: payment.currency
+          }
+        });
       }
 
       this.eventsService.logEvent({
