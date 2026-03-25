@@ -13,6 +13,7 @@ import { IdempotencyModule } from './modules/idempotency/idempotency.module';
 import { IdempotencyMiddleware } from './modules/idempotency/idempotency.middleware';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
@@ -34,6 +35,7 @@ import { UsersModule } from './modules/users/module';
     LedgerModule,
     PaymentsModule,
     LedgerModule,
+    IntegrationsModule,
     SubscriptionsModule,
     DocumentsModule,
     EventsModule,
