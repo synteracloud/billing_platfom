@@ -26,6 +26,7 @@
     "src/modules/events/queue/event-processing.worker.ts",
     "src/modules/events/queue/in-memory-queue.driver.ts",
     "src/modules/events/queue/event-queue.types.ts",
-    "src/modules/ledger/**/*.ts"
+    "src/modules/ledger/**/*.ts",
+    "src/modules/dashboard/**/*.ts"
   ]
 }
