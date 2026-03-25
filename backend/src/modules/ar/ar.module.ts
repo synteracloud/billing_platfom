@@ -10,6 +10,6 @@ import { ArService } from './ar.service';
   imports: [EventsModule, EventQueueModule],
   controllers: [ArController],
   providers: [ArService, ArRepository, ArEventsHandler],
-  exports: [ArService]
+  exports: [ArService, ArRepository]
 })
 export class ArModule {}

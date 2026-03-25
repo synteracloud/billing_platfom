@@ -44,6 +44,16 @@ export class ArRepository {
     return tenantPositions.get(invoiceId) ?? null;
   }
 
+
+  listInvoices(tenantId: string): ReceivableInvoicePosition[] {
+    const tenantPositions = this.positions.get(tenantId);
+    if (!tenantPositions) {
+      return [];
+    }
+
+    return Array.from(tenantPositions.values());
+  }
+
   listInvoicesByCustomer(tenantId: string, customerId: string): ReceivableInvoicePosition[] {
     const tenantPositions = this.positions.get(tenantId);
     if (!tenantPositions) {
