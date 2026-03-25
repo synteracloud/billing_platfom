@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { EventConsumerIdempotencyService } from '../../idempotency/event-consumer-idempotency.service';
+import { DomainEventType } from '../entities/event.entity';
 import { EVENT_QUEUE_DRIVER } from './queue.constants';
 import { EventProcessingRegistry } from './event-processing.registry';
 import { QueueDriver, QueueJob } from './event-queue.types';
@@ -32,9 +33,13 @@ export class EventProcessingWorker implements OnApplicationBootstrap, OnModuleDe
     for (const [index, handler] of handlers.entries()) {
       const consumerName = `${job.data.event_name}:handler:${index}`;
       await this.eventConsumerIdempotencyService.execute(
-        job.data.tenant_id,
+        {
+          tenant_id: job.data.tenant_id,
+          id: job.data.event_id,
+          type: job.data.event_name as DomainEventType,
+          idempotency_key: job.data.idempotency_key
+        },
         consumerName,
-        job.data.event_id,
         async () => {
           await handler(job.data);
           this.logger.log(
