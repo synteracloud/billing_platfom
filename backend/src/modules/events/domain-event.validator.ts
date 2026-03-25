@@ -93,6 +93,12 @@ const payloadValidators: {
       ['operating', 'cost_of_goods_sold', 'asset'] as const
     );
   },
+  'billing.bill.paid.v1': (payload) => {
+    requireString(payload.bill_id, 'payload.bill_id');
+    requireString(payload.paid_at, 'payload.paid_at');
+    requireNumber(payload.amount_paid_minor, 'payload.amount_paid_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
+  },
   'accounting.journal.posted.v1': (payload) => {
     requireString(payload.journal_entry_id, 'payload.journal_entry_id');
     requireString(payload.source_type, 'payload.source_type');

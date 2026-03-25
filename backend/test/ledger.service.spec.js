@@ -302,6 +302,45 @@ test('posts bill.created to expense and accounts payable idempotently', async ()
   );
 });
 
+test('posts bill.paid to accounts payable and cash idempotently', async () => {
+  const { ledgerService, eventsRepository } = createLedgerService();
+
+  const billPaidEvent = eventsRepository.create({
+    id: 'evt-bill-paid-1',
+    type: 'billing.bill.paid.v1',
+    version: 1,
+    tenant_id: 'tenant-1',
+    payload: {
+      bill_id: 'bill-evt-1',
+      paid_at: '2025-01-24T00:00:00.000Z',
+      amount_paid_minor: 3100,
+      currency_code: 'USD'
+    },
+    occurred_at: '2025-01-24T00:00:00.000Z',
+    recorded_at: '2025-01-24T00:00:00.000Z',
+    aggregate_type: 'bill',
+    aggregate_id: 'bill-evt-1',
+    aggregate_version: 2,
+    causation_id: null,
+    correlation_id: null,
+    idempotency_key: 'bill-paid-evt-1',
+    producer: 'test'
+  });
+
+  const first = await ledgerService.postEvent('tenant-1', billPaidEvent.id, 'bill-paid-retry-1', '2025-01-01');
+  const duplicate = await ledgerService.postEvent('tenant-1', billPaidEvent.id, 'bill-paid-retry-2', '2025-01-01');
+
+  assert.equal(first.id, duplicate.id);
+  assert.equal(first.lines.length, 2);
+  assert.deepEqual(
+    first.lines.map((line) => [line.account_code, line.direction, line.amount_minor]),
+    [
+      ['2000', 'debit', 3100],
+      ['1000', 'credit', 3100]
+    ]
+  );
+});
+
 test('posts payment.received (recorded) to cash and unallocated cash idempotently', async () => {
   const { ledgerService, eventsRepository } = createLedgerService();
 

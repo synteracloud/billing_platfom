@@ -118,6 +118,17 @@ export class FinancialTransactionManager {
     context.afterCommitCallbacks.push(callback);
   }
 
+  hasActiveTransaction(): boolean {
+    const currentContextId = this.contextStorage.getStore();
+    return Boolean(
+      this.activeContext
+      && currentContextId
+      && this.activeContext.id === currentContextId
+      && this.activeContext.depth > 0
+      && !this.activeContext.rolledBack
+    );
+  }
+
   private requireContext(): TransactionContext {
     const currentContextId = this.contextStorage.getStore();
     if (!this.activeContext || !currentContextId || this.activeContext.id !== currentContextId || this.activeContext.depth <= 0) {

@@ -3,7 +3,6 @@ import { randomUUID } from 'crypto';
 export const CANONICAL_EVENT_TYPES = [
   'billing.invoice.created.v1',
   'billing.invoice.sent.v1',
-  'billing.invoice.paid.v1',
   'billing.invoice.issued.v1',
   'billing.invoice.paid.v1',
   'billing.invoice.voided.v1',
@@ -142,6 +141,13 @@ export type BillCreatedPayload = {
   expense_classification: 'operating' | 'cost_of_goods_sold' | 'asset';
 };
 
+export type BillPaidPayload = {
+  bill_id: string;
+  paid_at: string;
+  amount_paid_minor: number;
+  currency_code: string;
+};
+
 export type PaymentAllocationChange = {
   invoice_id: string;
   allocated_delta_minor: number;
@@ -244,7 +250,6 @@ export type AuditPayload = {
 export type DomainEventPayloadMap = {
   'billing.invoice.created.v1': InvoiceCreatedPayload;
   'billing.invoice.sent.v1': InvoiceSentPayload;
-  'billing.invoice.paid.v1': InvoicePaidPayload;
   'billing.invoice.issued.v1': InvoiceIssuedPayload;
   'billing.invoice.paid.v1': InvoicePaidPayload;
   'billing.invoice.voided.v1': InvoiceVoidedPayload;
