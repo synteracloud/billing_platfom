@@ -961,3 +961,75 @@
 - `status IN ('draft', 'issued', 'approved', 'due', 'partially_paid', 'paid', 'void')`
 - draft lifecycle guard: draft bills must not have `issued_at`
 - temporal guard: `due_at >= issued_at` when both are present
+
+### 2.20 `reconciliations`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `status TEXT NOT NULL` (`matched`, `unmatched`, `manual`)
+- `run_id UUID NOT NULL` (groups deterministic reconciliation runs)
+- `rule_version TEXT NOT NULL` (pins matching rule set)
+- `as_of_window TSTZRANGE NOT NULL` (window used for replayable evaluation)
+- `created_at TIMESTAMPTZ NOT NULL`
+- `metadata JSONB NOT NULL DEFAULT '{}'::jsonb`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, id)`
+
+**Checks / invariants**
+- status is limited to `matched|unmatched|manual`
+- metadata must be a JSON object
+
+**Key indexes**
+- `INDEX (tenant_id, status)`
+- `INDEX (tenant_id, run_id)`
+- `INDEX (created_at)`
+
+### 2.21 `reconciliation_matches`
+
+**Columns**
+- `id UUID NOT NULL`
+- `tenant_id UUID NOT NULL`
+- `reconciliation_id UUID NOT NULL`
+- `source_type TEXT NOT NULL` (`invoice`, `payment`, `bank`)
+- `source_id TEXT NOT NULL`
+- `target_type TEXT NOT NULL` (`invoice`, `payment`, `bank`)
+- `target_id TEXT NOT NULL`
+- `status TEXT NOT NULL` (`matched`, `unmatched`, `manual`)
+- `confidence_score NUMERIC(5,4) NOT NULL` (`0.0000` to `1.0000`)
+- `created_at TIMESTAMPTZ NOT NULL`
+- `metadata JSONB NOT NULL DEFAULT '{}'::jsonb`
+- `source_ref TEXT GENERATED ALWAYS AS (source_type || ':' || source_id) STORED`
+- `target_ref TEXT GENERATED ALWAYS AS (target_type || ':' || target_id) STORED`
+
+**Primary key**
+- `PRIMARY KEY (id)`
+
+**Foreign keys**
+- `(tenant_id) -> tenant(id)`
+- `(tenant_id, reconciliation_id) -> reconciliations(tenant_id, id)`
+
+**Uniqueness constraints**
+- `UNIQUE (tenant_id, id)`
+
+**Checks / invariants**
+- source and target types are explicit and cannot be the same
+- type combinations enforce invoice ↔ payment ↔ bank mappings while allowing many-to-many rows
+- score must be in `[0,1]`
+- references cannot be blank strings
+- metadata must be a JSON object
+
+**Key indexes**
+- `INDEX (tenant_id, reconciliation_id, created_at)`
+- `INDEX (tenant_id, source_type, source_id)`
+- `INDEX (tenant_id, target_type, target_id)`
+- `INDEX (tenant_id, source_ref)`
+- `INDEX (tenant_id, target_ref)`
+- `INDEX (tenant_id, status)`
