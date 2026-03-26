@@ -9,6 +9,7 @@ import { EventQueuePublisher } from '../src/modules/events/queue/event-queue.pub
 import { InMemoryQueueDriver } from '../src/modules/events/queue/in-memory-queue.driver';
 import { LedgerRepository } from '../src/modules/ledger/ledger.repository';
 import { LedgerService } from '../src/modules/ledger/ledger.service';
+import { AccountingPeriodRepository } from '../src/modules/ledger/accounting-period.repository';
 
 async function main() {
   const idempotencyRepository = new IdempotencyRepository();
@@ -19,7 +20,7 @@ async function main() {
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventQueuePublisher);
   const ledgerRepository = new LedgerRepository();
   const transactionManager = new FinancialTransactionManager();
-  const ledgerService = new LedgerService(ledgerRepository, eventsService, transactionManager);
+  const ledgerService = new LedgerService(ledgerRepository, eventsService, transactionManager, new AccountingPeriodRepository());
 
   const invoiceIssued = eventsService.logEvent({
     tenant_id: 'tenant-1',

@@ -20,6 +20,7 @@ const { InMemoryQueueDriver } = require('../.tmp-test-dist/modules/events/queue/
 const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
 const { LedgerRepository } = require('../.tmp-test-dist/modules/ledger/ledger.repository');
 const { LedgerService } = require('../.tmp-test-dist/modules/ledger/ledger.service');
+const { AccountingPeriodRepository } = require('../.tmp-test-dist/modules/ledger/accounting-period.repository');
 const { LedgerInvoiceCreatedConsumer } = require('../.tmp-test-dist/modules/ledger/ledger-invoice-created.consumer');
 const { PaymentReceivedLedgerConsumer } = require('../.tmp-test-dist/modules/ledger/payment-received-ledger.consumer');
 
@@ -35,7 +36,7 @@ function createFixture() {
   const paymentsRepository = new PaymentsRepository();
 
   const ledgerRepository = new LedgerRepository();
-  const ledgerService = new LedgerService(ledgerRepository, eventsService, new FinancialTransactionManager());
+  const ledgerService = new LedgerService(ledgerRepository, eventsService, new FinancialTransactionManager(), new AccountingPeriodRepository());
   new LedgerInvoiceCreatedConsumer(processingRegistry, ledgerService).onApplicationBootstrap();
   new PaymentReceivedLedgerConsumer(processingRegistry, ledgerService).onApplicationBootstrap();
 

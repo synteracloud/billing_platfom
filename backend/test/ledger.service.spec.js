@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { LedgerService } = require('../.tmp-test-dist/modules/ledger/ledger.service');
 const { LedgerRepository } = require('../.tmp-test-dist/modules/ledger/ledger.repository');
+const { AccountingPeriodRepository } = require('../.tmp-test-dist/modules/ledger/accounting-period.repository');
 const { EventBusService } = require('../.tmp-test-dist/modules/events/event-bus.service');
 const { EventsService } = require('../.tmp-test-dist/modules/events/events.service');
 const { EventsRepository } = require('../.tmp-test-dist/modules/events/events.repository');
@@ -21,7 +22,7 @@ function createLedgerService() {
   const transactionManager = new FinancialTransactionManager();
 
   return {
-    ledgerService: new LedgerService(ledgerRepository, eventsService, transactionManager),
+    ledgerService: new LedgerService(ledgerRepository, eventsService, transactionManager, new AccountingPeriodRepository()),
     ledgerRepository,
     eventsRepository
   };
@@ -338,6 +339,80 @@ test('posts bill.paid to accounts payable and cash idempotently', async () => {
       ['2000', 'debit', 3100],
       ['1000', 'credit', 3100]
     ]
+  );
+});
+
+test('closes period, blocks posting, then reopens with audit chain', async () => {
+  const { ledgerService, eventsRepository } = createLedgerService();
+  const tenantId = 'tenant-1';
+
+  const closed = ledgerService.closePeriod(tenantId, '2025-01', { actor_id: 'user-admin-1', role: 'admin' });
+  assert.equal(closed.status, 'closed');
+  assert.equal(closed.period_start, '2025-01-01');
+  assert.equal(closed.period_end, '2025-01-31');
+
+  await assert.rejects(() => ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-closed-1',
+    source_event_id: 'event-invoice-closed-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-01-22',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 100, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 100, currency_code: 'USD' }
+    ]
+  }), /closed and locked/);
+
+  const reopened = ledgerService.reopenPeriod(tenantId, '2025-01', 'Controller approved adjustment', { actor_id: 'user-admin-2', role: 'admin' });
+  assert.equal(reopened.status, 'reopened');
+  assert.equal(reopened.reopen_reason, 'Controller approved adjustment');
+
+  const posted = await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-reopened-1',
+    source_event_id: 'event-invoice-reopened-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-01-23',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 100, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 100, currency_code: 'USD' }
+    ]
+  });
+  assert.equal(posted.entry_date, '2025-01-23');
+
+  const auditTypes = eventsRepository
+    .listByTenant(tenantId, {})
+    .filter((event) => event.type.startsWith('audit.accounting_period'))
+    .map((event) => event.type)
+    .sort();
+  assert.deepEqual(
+    auditTypes,
+    [
+      'audit.accounting_period.closed.v1',
+      'audit.accounting_period.posting_blocked_closed_period.v1',
+      'audit.accounting_period.reopened.v1'
+    ].sort()
+  );
+});
+
+test('restricts close/reopen to admin role', async () => {
+  const { ledgerService } = createLedgerService();
+
+  assert.throws(
+    () => ledgerService.closePeriod('tenant-1', '2025-01', { actor_id: 'user-member-1', role: 'member' }),
+    /Only admins can close accounting periods/
+  );
+
+  ledgerService.closePeriod('tenant-1', '2025-01', { actor_id: 'user-admin', role: 'admin' });
+  assert.throws(
+    () => ledgerService.reopenPeriod('tenant-1', '2025-01', 'Need correction', { actor_id: 'user-member-2', role: 'member' }),
+    /Only admins can reopen accounting periods/
   );
 });
 
