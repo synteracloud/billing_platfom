@@ -29,6 +29,11 @@ export class AnalyticsController {
     return this.analyticsService.getRunway(request.tenant.id, parsed);
   }
 
+  @Get('tax-summary')
+  getTaxSummary(@Req() request: AuthenticatedRequest) {
+    return this.analyticsService.getTaxSummary(request.tenant.id);
+  }
+
   @Get('anomalies')
   getAnomalies(@Req() request: AuthenticatedRequest) {
     return this.analyticsService.getAnomalies(request.tenant.id);

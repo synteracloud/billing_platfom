@@ -13,6 +13,7 @@ import { InvoicesRepository } from '../src/modules/invoices/invoices.repository'
 import { InvoicesService } from '../src/modules/invoices/invoices.service';
 import { LedgerRepository } from '../src/modules/ledger/ledger.repository';
 import { LedgerService } from '../src/modules/ledger/ledger.service';
+import { AccountingPeriodRepository } from '../src/modules/ledger/accounting-period.repository';
 import { PaymentsRepository } from '../src/modules/payments/payments.repository';
 import { PaymentsService } from '../src/modules/payments/payments.service';
 
@@ -29,7 +30,7 @@ async function main() {
   const paymentsRepository = new PaymentsRepository();
   const invoicesService = new InvoicesService(invoicesRepository, customersService, eventsService, transactionManager);
   const paymentsService = new PaymentsService(paymentsRepository, invoicesRepository, customersService, eventsService, transactionManager);
-  const ledgerService = new LedgerService(new LedgerRepository(), eventsService, transactionManager);
+  const ledgerService = new LedgerService(new LedgerRepository(), eventsService, transactionManager, new AccountingPeriodRepository());
 
   const tenantId = 'tenant-audit';
   const customer = customersService.createCustomer(tenantId, {

@@ -4,30 +4,26 @@ const ts = require('/root/.nvm/versions/node/v22.21.1/lib/node_modules/typescrip
 
 const sourceFiles = [
   'src/common/transactions/financial-transaction.manager.ts',
-  'src/modules/idempotency/entities/idempotency-key.entity.ts',
-  'src/modules/idempotency/idempotency.repository.ts',
-  'src/modules/idempotency/idempotency.service.ts',
-  'src/modules/idempotency/event-consumer-idempotency.service.ts',
-  'src/modules/events/entities/event.entity.ts',
-  'src/modules/events/domain-event.validator.ts',
-  'src/modules/events/dto/query-events.dto.ts',
-  'src/modules/events/events.repository.ts',
-  'src/modules/events/event-bus.service.ts',
-  'src/modules/events/events.service.ts',
-  'src/modules/events/queue/event-queue.types.ts',
-  'src/modules/events/queue/in-memory-queue.driver.ts',
-  'src/modules/events/queue/queue.constants.ts',
-  'src/modules/events/queue/event-queue.publisher.ts',
   'src/modules/accounting/entities/chart-of-account.entity.ts',
   'src/modules/accounting/chart-of-accounts.defaults.ts',
   'src/modules/ledger/entities/journal-entry.entity.ts',
   'src/modules/ledger/entities/journal-line.entity.ts',
-  'src/modules/ledger/accounting-period.repository.ts',
   'src/modules/ledger/ledger.repository.ts',
-  'src/modules/tax/tax.types.ts',
-  'src/modules/tax/tax.repository.ts',
-  'src/modules/tax/tax.service.ts',
-  'src/modules/ledger/ledger.service.ts'
+  'src/modules/events/entities/event.entity.ts',
+  'src/modules/events/domain-event.validator.ts',
+  'src/modules/events/events.repository.ts',
+  'src/modules/events/queue/event-queue.types.ts',
+  'src/modules/events/queue/in-memory-queue.driver.ts',
+  'src/modules/events/queue/queue.constants.ts',
+  'src/modules/events/queue/event-queue.publisher.ts',
+  'src/modules/idempotency/entities/idempotency-key.entity.ts',
+  'src/modules/idempotency/idempotency.repository.ts',
+  'src/modules/idempotency/idempotency.service.ts',
+  'src/modules/idempotency/event-consumer-idempotency.service.ts',
+  'src/modules/events/event-bus.service.ts',
+  'src/modules/events/events.service.ts',
+  'src/modules/ledger/ledger.service.ts',
+  'src/modules/statements/financial-statements.service.ts'
 ];
 
 const srcRoot = path.resolve(__dirname);
@@ -55,4 +51,4 @@ for (const relativeFile of sourceFiles) {
 }
 
 require('node:test');
-require('./test/ledger.service.spec.js');
+require('./test/financial-statements.engine.spec.js');

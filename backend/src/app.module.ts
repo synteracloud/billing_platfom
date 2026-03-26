@@ -44,6 +44,7 @@ import { TaxModule } from './modules/tax/tax.module';
     LedgerModule,
     IntegrationsModule,
     SubscriptionsModule,
+    StatementsModule,
     DocumentsModule,
     EventsModule,
     AuthModule,
@@ -86,10 +87,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow/(.*)', method: RequestMethod.ALL },
-      { path: 'api/v1/reports/tax', method: RequestMethod.ALL },
-      { path: 'api/v1/reports/tax/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }
@@ -104,7 +105,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/payments', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/allocate', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/void', method: RequestMethod.POST },
-      { path: 'api/v1/ledger/postings', method: RequestMethod.POST }
+      { path: 'api/v1/ledger/postings', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/manual-entries', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/adjustments', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/entries/:journal_entry_id/reversal', method: RequestMethod.POST }
     );
 
 
