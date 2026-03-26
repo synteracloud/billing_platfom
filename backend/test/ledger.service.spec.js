@@ -379,3 +379,97 @@ test('posts payment.received (recorded) to cash and unallocated cash idempotentl
     ]
   );
 });
+
+const { TaxService } = require('../.tmp-test-dist/modules/tax/tax.service');
+const { TaxRepository } = require('../.tmp-test-dist/modules/tax/tax.repository');
+
+test('tax engine computes inclusive and exclusive taxes deterministically', () => {
+  const taxService = new TaxService(new TaxRepository());
+
+  const exclusive = taxService.calculateDocumentTaxes({
+    tenant_id: 'tenant-tax',
+    jurisdiction: 'US-CA',
+    currency_code: 'USD',
+    effective_at: '2026-03-01',
+    lines: [{ amount_minor: 1000, quantity: 1, tax_rate_basis_points: 750, tax_inclusive: false, tax_code: 'CA_STD' }]
+  });
+
+  const inclusive = taxService.calculateDocumentTaxes({
+    tenant_id: 'tenant-tax',
+    jurisdiction: 'US-CA',
+    currency_code: 'USD',
+    effective_at: '2026-03-01',
+    lines: [{ amount_minor: 1075, quantity: 1, tax_rate_basis_points: 750, tax_inclusive: true, tax_code: 'CA_STD' }]
+  });
+
+  assert.equal(exclusive.subtotal_minor, 1000);
+  assert.equal(exclusive.tax_minor, 75);
+  assert.equal(exclusive.total_minor, 1075);
+  assert.equal(inclusive.subtotal_minor, 1000);
+  assert.equal(inclusive.tax_minor, 75);
+  assert.equal(inclusive.total_minor, 1075);
+});
+
+test('ledger postings split tax liability for invoice and bill events', async () => {
+  const { ledgerService, eventsRepository } = createLedgerService();
+
+  const invoiceEvent = eventsRepository.create({
+    id: 'evt-tax-invoice',
+    type: 'billing.invoice.issued.v1',
+    version: 1,
+    tenant_id: 'tenant-tax',
+    payload: { invoice_id: 'inv-tax-1', customer_id: 'cust-1', issue_date: '2026-03-15', due_date: null, subtotal_minor: 1000, tax_minor: 75, total_minor: 1075, currency_code: 'USD' },
+    occurred_at: '2026-03-15T00:00:00.000Z',
+    recorded_at: '2026-03-15T00:00:00.000Z',
+    aggregate_type: 'invoice',
+    aggregate_id: 'inv-tax-1',
+    aggregate_version: 1,
+    causation_id: null,
+    correlation_id: null,
+    idempotency_key: 'evt-tax-invoice',
+    producer: 'test'
+  });
+
+  const billEvent = eventsRepository.create({
+    id: 'evt-tax-bill',
+    type: 'billing.bill.created.v1',
+    version: 1,
+    tenant_id: 'tenant-tax',
+    payload: {
+      bill_id: 'bill-tax-1',
+      vendor_id: 'vendor-1',
+      created_at: '2026-03-16T00:00:00.000Z',
+      subtotal_minor: 500,
+      tax_minor: 25,
+      total_minor: 525,
+      currency_code: 'USD',
+      expense_classification: 'operating'
+    },
+    occurred_at: '2026-03-16T00:00:00.000Z',
+    recorded_at: '2026-03-16T00:00:00.000Z',
+    aggregate_type: 'bill',
+    aggregate_id: 'bill-tax-1',
+    aggregate_version: 1,
+    causation_id: null,
+    correlation_id: null,
+    idempotency_key: 'evt-tax-bill',
+    producer: 'test'
+  });
+
+  const invoicePosting = await ledgerService.postEvent('tenant-tax', invoiceEvent.id, 'tax-invoice-key', '2026-03-26');
+  const billPosting = await ledgerService.postEvent('tenant-tax', billEvent.id, 'tax-bill-key', '2026-03-26');
+
+  const taxCredits = invoicePosting.lines.filter((line) => line.account_code === '2100' && line.direction === 'credit').reduce((sum, line) => sum + line.amount_minor, 0);
+  const taxDebits = billPosting.lines.filter((line) => line.account_code === '2100' && line.direction === 'debit').reduce((sum, line) => sum + line.amount_minor, 0);
+  assert.equal(taxCredits, 75);
+  assert.equal(taxDebits, 25);
+
+  const taxService = new TaxService(new TaxRepository());
+  const summary = taxService.buildTaxSummary({
+    salesTaxDocuments: [{ jurisdiction: 'US-CA', tax_minor: 75 }],
+    purchaseTaxDocuments: [{ jurisdiction: 'US-CA', tax_minor: 25 }],
+    ledgerEntries: [invoicePosting, billPosting]
+  });
+
+  assert.equal(summary.net_tax_liability_minor, 50);
+});

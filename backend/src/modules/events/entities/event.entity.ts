@@ -53,6 +53,9 @@ export type InvoiceCreatedPayload = {
   customer_id: string;
   invoice_number: string;
   status: 'draft' | 'issued' | 'paid' | 'void';
+  subtotal_minor?: number;
+  tax_minor?: number;
+  jurisdiction?: string;
   total_minor: number;
   currency_code: string;
 };
@@ -62,6 +65,9 @@ export type InvoiceIssuedPayload = {
   customer_id: string;
   issue_date: string;
   due_date: string | null;
+  subtotal_minor?: number;
+  tax_minor?: number;
+  jurisdiction?: string;
   total_minor: number;
   currency_code: string;
 };
@@ -137,6 +143,9 @@ export type BillCreatedPayload = {
   vendor_id?: string;
   created_at: string;
   due_date?: string | null;
+  subtotal_minor?: number;
+  tax_minor?: number;
+  jurisdiction?: string;
   total_minor: number;
   currency_code: string;
   expense_classification: 'operating' | 'cost_of_goods_sold' | 'asset';
