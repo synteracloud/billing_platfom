@@ -19,6 +19,8 @@ const { InMemoryQueueDriver } = require('../.tmp-test-dist/modules/events/queue/
 const { EventProcessingRegistry } = require('../.tmp-test-dist/modules/events/queue/event-processing.registry');
 const { EventProcessingWorker } = require('../.tmp-test-dist/modules/events/queue/event-processing.worker');
 const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
+const { ApprovalRepository } = require('../.tmp-test-dist/modules/approval/approval.repository');
+const { ApprovalService } = require('../.tmp-test-dist/modules/approval/approval.service');
 
 function seedCustomer(customersRepository, tenantId = 'tenant-ar') {
   return customersRepository.create({
@@ -70,6 +72,8 @@ test('AR projection stays event-driven and keeps customer balance consistent thr
   const eventQueuePublisher = new EventQueuePublisher(queueDriver);
   const eventsService = new EventsService(new EventsRepository(), eventConsumerIdempotencyService, eventQueuePublisher);
   const transactionManager = new FinancialTransactionManager();
+  const approvalService = new ApprovalService(new ApprovalRepository());
+  approvalService.configureThreshold('tenant-1', 'large_payment_exception', { requires_approval_over_minor: 1_000_000_000 });
 
   const customersRepository = new CustomersRepository();
   const customersService = new CustomersService(customersRepository);
@@ -80,6 +84,7 @@ test('AR projection stays event-driven and keeps customer balance consistent thr
     customersService,
     eventsService,
     idempotencyService,
+    approvalService,
     transactionManager
   );
 

@@ -7,6 +7,7 @@ export interface CreatePaymentDto {
   payment_method: string;
   allocations?: AllocatePaymentItemDto[];
   metadata?: Record<string, unknown> | null;
+  approval_request_id?: string;
 }
 
 export interface AllocatePaymentItemDto {

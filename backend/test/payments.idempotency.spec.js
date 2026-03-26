@@ -14,6 +14,8 @@ const { IdempotencyService } = require('../.tmp-test-dist/modules/idempotency/id
 const { EventQueuePublisher } = require('../.tmp-test-dist/modules/events/queue/event-queue.publisher');
 const { InMemoryQueueDriver } = require('../.tmp-test-dist/modules/events/queue/in-memory-queue.driver');
 const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
+const { ApprovalRepository } = require('../.tmp-test-dist/modules/approval/approval.repository');
+const { ApprovalService } = require('../.tmp-test-dist/modules/approval/approval.service');
 
 function createPaymentsService() {
   const paymentsRepository = new PaymentsRepository();
@@ -28,6 +30,8 @@ function createPaymentsService() {
   const eventQueuePublisher = new EventQueuePublisher(queueDriver);
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventQueuePublisher);
   const transactionManager = new FinancialTransactionManager();
+  const approvalService = new ApprovalService(new ApprovalRepository());
+  approvalService.configureThreshold('tenant-1', 'large_payment_exception', { requires_approval_over_minor: 1_000_000_000 });
 
   const paymentsService = new PaymentsService(
     paymentsRepository,
@@ -35,6 +39,7 @@ function createPaymentsService() {
     customersService,
     eventsService,
     idempotencyService,
+    approvalService,
     transactionManager
   );
 

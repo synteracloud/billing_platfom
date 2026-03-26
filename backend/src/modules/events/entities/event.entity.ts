@@ -46,7 +46,8 @@ export type DomainAggregateType =
   | 'reconciliation_run'
   | 'reconciliation_result'
   | 'document'
-  | 'subscription';
+  | 'subscription'
+  | 'approval_request';
 
 export type InvoiceCreatedPayload = {
   invoice_id: string;
