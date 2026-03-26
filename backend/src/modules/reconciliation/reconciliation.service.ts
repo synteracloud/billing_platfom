@@ -188,9 +188,13 @@ export class ReconciliationService {
     const next = scoredCandidates[1];
     const confidenceGap = next ? top.score - next.score : 1;
     const hasReferenceSignal = top.reasons.some((reason) => reason === 'Reference identifier match');
+    const hasCounterpartySignal = top.reasons.some((reason) => reason === 'Counterparty names are similar');
+    const hasExactAmountSignal = top.reasons.some((reason) => reason === 'Exact amount match');
+    const hasDateSignal = top.reasons.some((reason) => reason.startsWith('Date proximity within'));
     const minimumScore = hasReferenceSignal ? 0.55 : 0.65;
     const minimumGap = hasReferenceSignal ? 0.08 : 0.14;
-    const isConfident = top.score >= minimumScore && confidenceGap >= minimumGap;
+    const hasGroundedSignalBundle = hasReferenceSignal || (hasCounterpartySignal && hasExactAmountSignal && hasDateSignal);
+    const isConfident = top.score >= minimumScore && confidenceGap >= minimumGap && hasGroundedSignalBundle;
 
     return {
       unmatched_transaction_id: transaction.id,

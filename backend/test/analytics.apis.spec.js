@@ -534,6 +534,23 @@ test('classification is deterministic, grounded, and falls back safely when evid
   assert.ok(fallback.confidence_score <= 0.4);
 });
 
+test('classification falls back when signals conflict and avoids substring hallucinations', () => {
+  const analyticsService = new AnalyticsService(new LedgerRepository(), new ArRepository(), new ApRepository());
+
+  const conflicting = analyticsService.classifyTransaction({
+    transaction_description: 'invoice customer payment for vendor bill',
+    metadata: { merchant_name: 'Mixed Source' }
+  });
+  assert.equal(conflicting.category, 'other');
+  assert.equal(conflicting.deterministic_fallback_used, true);
+
+  const substringNoise = analyticsService.classifyTransaction({
+    transaction_description: 'Monthly assertion tool subscription',
+    metadata: null
+  });
+  assert.notEqual(substringNoise.category, 'asset');
+});
+
 test('copilot suggestions are assistive-only and do not mutate ledger/ar/ap state', () => {
   const tenantId = 'tenant-copilot-safety';
   const ledgerRepository = new LedgerRepository();
@@ -590,4 +607,28 @@ test('copilot suggestions are assistive-only and do not mutate ledger/ar/ap stat
   assert.deepEqual(ledgerRepository.createSnapshot(), ledgerSnapshot);
   assert.deepEqual(arRepository.listInvoices(tenantId), invoicesBefore);
   assert.deepEqual(apRepository.listBills(tenantId), billsBefore);
+});
+
+test('collections prediction grounds invalid dates and numeric values to safe deterministic defaults', () => {
+  const tenantId = 'tenant-collections-grounded';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-grounded-open',
+    customer_id: 'cust-grounded',
+    currency_code: 'USD',
+    issue_date: 'invalid-issue-date',
+    due_date: 'invalid-due-date',
+    total_minor: 1200,
+    open_amount_minor: Number.NaN,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-06-20T00:00:00.000Z'
+  });
+
+  const report = analyticsService.getCollectionsPrediction(tenantId);
+  assert.equal(report.predictions.length, 0, 'invalid numeric rows should be excluded from open predictions');
 });
