@@ -22,6 +22,7 @@ const sourceFiles = [
   'src/modules/accounting/chart-of-accounts.defaults.ts',
   'src/modules/ledger/entities/journal-entry.entity.ts',
   'src/modules/ledger/entities/journal-line.entity.ts',
+  'src/modules/ledger/accounting-period.repository.ts',
   'src/modules/ledger/ledger.repository.ts',
   'src/modules/ledger/ledger.service.ts'
 ];

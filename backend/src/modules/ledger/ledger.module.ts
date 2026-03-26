@@ -13,10 +13,11 @@ import { PaymentReceivedLedgerConsumer } from './payment-received-ledger.consume
   controllers: [LedgerController],
   providers: [
     LedgerRepository,
+    AccountingPeriodRepository,
     LedgerService,
     LedgerInvoiceCreatedConsumer,
     PaymentReceivedLedgerConsumer
   ],
-  exports: [LedgerService, LedgerRepository]
+  exports: [LedgerService, LedgerRepository, AccountingPeriodRepository]
 })
 export class LedgerModule {}

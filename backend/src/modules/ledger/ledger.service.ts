@@ -151,12 +151,100 @@ export class LedgerService {
   constructor(
     private readonly ledgerRepository: LedgerRepository,
     private readonly eventsService: EventsService,
-    private readonly transactionManager: FinancialTransactionManager
+    private readonly transactionManager: FinancialTransactionManager,
+    private readonly accountingPeriodRepository: AccountingPeriodRepository
   ) {
     this.validateSystemChartOfAccounts();
   }
 
+  closePeriod(tenantId: string, period: string, actor: { actor_id: string; role: UserRole }): AccountingPeriodEntity {
+    this.assertPrivilegedRole(actor.role, 'Only admins can close accounting periods');
+    const { period_start, period_end } = this.normalizePeriod(period);
+    const existing = this.accountingPeriodRepository.findByPeriod(tenantId, period_start);
+    const now = new Date().toISOString();
+
+    if (existing?.status === 'closed') {
+      return existing;
+    }
+
+    const closed: AccountingPeriodEntity = {
+      id: this.createDeterministicId('accounting-period', tenantId, period_start),
+      tenant_id: tenantId,
+      period_start,
+      period_end,
+      status: 'closed',
+      lock_version: (existing?.lock_version ?? 0) + 1,
+      closed_at: now,
+      closed_by: actor.actor_id,
+      reopened_at: null,
+      reopened_by: null,
+      reopen_reason: null
+    };
+    const saved = this.accountingPeriodRepository.save(closed);
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'accounting_period',
+      entity_id: saved.id,
+      action: 'closed',
+      aggregate_version: saved.lock_version,
+      actor_type: 'user',
+      actor_id: actor.actor_id,
+      payload: {
+        period_start: saved.period_start,
+        period_end: saved.period_end,
+        status: saved.status
+      }
+    });
+    return saved;
+  }
+
+  reopenPeriod(tenantId: string, period: string, reopenReason: string, actor: { actor_id: string; role: UserRole }): AccountingPeriodEntity {
+    this.assertPrivilegedRole(actor.role, 'Only admins can reopen accounting periods');
+    const reason = reopenReason?.trim();
+    if (!reason) {
+      throw new BadRequestException('reopen_reason is required');
+    }
+
+    const { period_start, period_end } = this.normalizePeriod(period);
+    const existing = this.accountingPeriodRepository.findByPeriod(tenantId, period_start);
+    if (!existing || existing.status !== 'closed') {
+      throw new ConflictException('Only closed periods can be reopened');
+    }
+
+    const reopened: AccountingPeriodEntity = {
+      ...existing,
+      period_end,
+      status: 'reopened',
+      lock_version: existing.lock_version + 1,
+      reopened_at: new Date().toISOString(),
+      reopened_by: actor.actor_id,
+      reopen_reason: reason
+    };
+    const saved = this.accountingPeriodRepository.save(reopened);
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'accounting_period',
+      entity_id: saved.id,
+      action: 'reopened',
+      aggregate_version: saved.lock_version,
+      actor_type: 'user',
+      actor_id: actor.actor_id,
+      payload: {
+        period_start: saved.period_start,
+        period_end: saved.period_end,
+        reopen_reason: saved.reopen_reason,
+        status: saved.status
+      }
+    });
+    return saved;
+  }
+
   post(transaction: PostingTransactionInput): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    try {
+      this.assertPostingAllowedPreflight(transaction);
+    } catch (error) {
+      return Promise.reject(error);
+    }
     return this.transactionManager.wrapper(() => {
       const normalized = this.validateAndNormalize(transaction);
       const existing = this.ledgerRepository.findBySourceEvent(
@@ -805,7 +893,72 @@ export class LedgerService {
         key: 'events.service',
         snapshot: () => this.eventsService.createSnapshot(),
         restore: (snapshot) => this.eventsService.restoreSnapshot(snapshot as ReturnType<EventsService['createSnapshot']>)
+      },
+      {
+        key: 'ledger.accounting-period.repository',
+        snapshot: () => this.accountingPeriodRepository.createSnapshot(),
+        restore: (snapshot) => this.accountingPeriodRepository.restoreSnapshot(snapshot as ReturnType<AccountingPeriodRepository['createSnapshot']>)
       }
     ];
+  }
+
+  private assertPostingAllowedForPeriod(tenantId: string, entryDate: string, sourceEventId: string): void {
+    const period = this.accountingPeriodRepository.findByDate(tenantId, entryDate);
+    if (!period || period.status !== 'closed') {
+      return;
+    }
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'accounting_period',
+      entity_id: period.id,
+      action: 'posting_blocked_closed_period',
+      aggregate_version: period.lock_version,
+      actor_type: 'system',
+      actor_id: null,
+      causation_id: sourceEventId,
+      payload: {
+        period_start: period.period_start,
+        period_end: period.period_end,
+        attempted_entry_date: entryDate,
+        status: period.status
+      }
+    });
+    throw new ConflictException(`Accounting period ${period.period_start}..${period.period_end} is closed and locked for posting`);
+  }
+
+  private assertPostingAllowedPreflight(transaction: PostingTransactionInput): void {
+    const tenantId = transaction.tenant_id?.trim();
+    const entryDate = transaction.entry_date?.trim();
+    const sourceEventId = transaction.source_event_id?.trim() || 'unknown';
+    if (!tenantId || !entryDate || !/^\d{4}-\d{2}-\d{2}$/.test(entryDate)) {
+      return;
+    }
+    this.assertPostingAllowedForPeriod(tenantId, entryDate, sourceEventId);
+  }
+
+  private normalizePeriod(period: string): { period_start: string; period_end: string } {
+    const normalized = period?.trim();
+    if (!/^\d{4}-\d{2}$/.test(normalized)) {
+      throw new BadRequestException('period must be in YYYY-MM format');
+    }
+
+    const [year, month] = normalized.split('-').map((value) => Number.parseInt(value, 10));
+    if (month < 1 || month > 12) {
+      throw new BadRequestException('period month must be between 01 and 12');
+    }
+
+    const periodStartDate = new Date(Date.UTC(year, month - 1, 1));
+    const periodEndDate = new Date(Date.UTC(year, month, 0));
+    return {
+      period_start: periodStartDate.toISOString().slice(0, 10),
+      period_end: periodEndDate.toISOString().slice(0, 10)
+    };
+  }
+
+  private assertPrivilegedRole(role: UserRole, message: string): void {
+    if (role !== 'admin') {
+      throw new ForbiddenException(message);
+    }
   }
 }
