@@ -25,6 +25,7 @@ import { UsersModule } from './modules/users/module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module';
 import { CashflowModule } from './modules/cashflow/cashflow.module';
+import { TaxModule } from './modules/tax/tax.module';
 
 @Module({
   imports: [
@@ -52,7 +53,8 @@ import { CashflowModule } from './modules/cashflow/cashflow.module';
     AnalyticsModule,
     WebhooksModule,
     ReconciliationModule,
-    CashflowModule
+    CashflowModule,
+    TaxModule
   ]
 })
 export class AppModule implements NestModule {
