@@ -110,6 +110,19 @@ export interface AnomalyItem {
   note: string;
 }
 
+
+export interface TaxSummaryReport {
+  tax_collected_minor: number;
+  tax_paid_minor: number;
+  net_tax_liability_minor: number;
+  by_jurisdiction: Array<{
+    jurisdiction: string;
+    tax_collected_minor: number;
+    tax_paid_minor: number;
+    net_tax_liability_minor: number;
+  }>;
+}
+
 export interface AnomalyReport {
   currency_code: string;
   analysis_mode: 'read_only';
@@ -223,6 +236,35 @@ export class AnalyticsService {
       projected_daily_net_burn_minor: Math.round(projectedDailyBurnMinor),
       projected_runway_days: projectedRunwayDays,
       based_on_horizon_days: horizon
+    };
+  }
+
+
+  getTaxSummary(tenantId: string): TaxSummaryReport {
+    const totals = this.ledgerRepository.listEntries(tenantId).reduce((acc, entry) => {
+      for (const line of entry.lines) {
+        if (line.account_code !== '2100') {
+          continue;
+        }
+        if (line.direction === 'credit') {
+          acc.tax_collected_minor += line.amount_minor;
+        } else {
+          acc.tax_paid_minor += line.amount_minor;
+        }
+      }
+      return acc;
+    }, { tax_collected_minor: 0, tax_paid_minor: 0 });
+
+    const net = totals.tax_collected_minor - totals.tax_paid_minor;
+    return {
+      ...totals,
+      net_tax_liability_minor: net,
+      by_jurisdiction: [{
+        jurisdiction: 'GLOBAL',
+        tax_collected_minor: totals.tax_collected_minor,
+        tax_paid_minor: totals.tax_paid_minor,
+        net_tax_liability_minor: net
+      }]
     };
   }
 

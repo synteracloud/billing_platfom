@@ -643,10 +643,7 @@ export class LedgerService {
           entry_date: event.occurred_at.slice(0, 10),
           currency_code: payload.currency_code,
           description: `Invoice created ${payload.invoice_id}`,
-          entries: [
-            this.createPostingLine('1100', 'Accounts Receivable', 'debit', payload.total_minor, payload.currency_code),
-            this.createPostingLine('4000', 'Revenue', 'credit', payload.total_minor, payload.currency_code)
-          ]
+          entries: this.buildInvoicePostingLines(payload.total_minor, payload.tax_minor ?? 0, payload.currency_code)
         };
       }
       case 'billing.invoice.issued.v1': {
@@ -661,10 +658,7 @@ export class LedgerService {
           entry_date: payload.issue_date,
           currency_code: payload.currency_code,
           description: `Invoice issued ${payload.invoice_id}`,
-          entries: [
-            this.createPostingLine('1100', 'Accounts Receivable', 'debit', payload.total_minor, payload.currency_code),
-            this.createPostingLine('4000', 'Revenue', 'credit', payload.total_minor, payload.currency_code)
-          ]
+          entries: this.buildInvoicePostingLines(payload.total_minor, payload.tax_minor ?? 0, payload.currency_code)
         };
       }
       case 'billing.payment.settled.v1': {
@@ -755,15 +749,43 @@ export class LedgerService {
           entry_date: payload.created_at.slice(0, 10),
           currency_code: payload.currency_code,
           description: `Bill created ${payload.bill_id} (${payload.expense_classification})`,
-          entries: [
-            this.createPostingLine('5000', 'Expense', 'debit', payload.total_minor, payload.currency_code),
-            this.createPostingLine('2000', 'Accounts Payable', 'credit', payload.total_minor, payload.currency_code)
-          ]
+          entries: this.buildBillPostingLines(payload.total_minor, payload.tax_minor ?? 0, payload.currency_code)
         };
       }
       default:
         throw new BadRequestException(`Unsupported event_name: ${eventType}`);
     }
+  }
+
+
+  private buildInvoicePostingLines(totalMinor: number, taxMinor: number, currencyCode: string): PostingLineInput[] {
+    const safeTaxMinor = Math.max(0, Math.min(totalMinor, taxMinor));
+    const revenueMinor = Math.max(0, totalMinor - safeTaxMinor);
+    const lines: PostingLineInput[] = [
+      this.createPostingLine('1100', 'Accounts Receivable', 'debit', totalMinor, currencyCode),
+      this.createPostingLine('4000', 'Revenue', 'credit', revenueMinor, currencyCode)
+    ];
+
+    if (safeTaxMinor > 0) {
+      lines.push(this.createPostingLine('2100', 'Sales Tax Payable', 'credit', safeTaxMinor, currencyCode));
+    }
+
+    return lines;
+  }
+
+  private buildBillPostingLines(totalMinor: number, taxMinor: number, currencyCode: string): PostingLineInput[] {
+    const safeTaxMinor = Math.max(0, Math.min(totalMinor, taxMinor));
+    const expenseMinor = Math.max(0, totalMinor - safeTaxMinor);
+    const lines: PostingLineInput[] = [
+      this.createPostingLine('5000', 'Expense', 'debit', expenseMinor, currencyCode)
+    ];
+
+    if (safeTaxMinor > 0) {
+      lines.push(this.createPostingLine('2100', 'Sales Tax Payable', 'debit', safeTaxMinor, currencyCode));
+    }
+
+    lines.push(this.createPostingLine('2000', 'Accounts Payable', 'credit', totalMinor, currencyCode));
+    return lines;
   }
 
   private createPostingLine(accountCode: string, accountName: string, direction: JournalLineDirection, amountMinor: number, currencyCode: string): PostingLineInput {
