@@ -1,13 +1,16 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
+import { UserRole } from '../../common/interfaces/authenticated-request.interface';
 import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
 import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
 import { BillCreatedPayload, BillPaidPayload, DomainEvent, InvoiceCreatedPayload, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
+import { CreateAdjustmentEntryDto, CreateManualJournalEntryDto } from './dto/manual-journal-entry.dto';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
 import { LedgerRepository } from './ledger.repository';
+import { CreateReversalEntryDto } from './dto/create-reversal-entry.dto';
 
 const SUPPORTED_EVENT_NAMES = new Set([
   'billing.invoice.created.v1',
@@ -17,7 +20,10 @@ const SUPPORTED_EVENT_NAMES = new Set([
   'billing.payment.refunded.v1',
   'billing.bill.created.v1',
   'billing.bill.approved.v1',
-  'billing.bill.paid.v1'
+  'billing.bill.paid.v1',
+  'accounting.manual.journal.posted.v1',
+  'accounting.adjustment.journal.posted.v1',
+  'accounting.journal.reversed.v1'
 ]);
 
 const SYSTEM_ACCOUNT_INDEX = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((account) => [account.code, account]));
@@ -136,6 +142,7 @@ export interface PostingTransactionInput {
   entry_date: string;
   currency_code: string;
   description?: string | null;
+  metadata?: Record<string, unknown> | null;
   entries: PostingLineInput[];
 }
 
@@ -186,6 +193,7 @@ export class LedgerService {
         entry_date: normalized.entry_date,
         currency_code: normalized.currency_code,
         description: normalized.description,
+        metadata: normalized.metadata,
         created_at: normalized.created_at
       };
 
@@ -285,192 +293,161 @@ export class LedgerService {
     return this.ledgerRepository.findById(tenantId, journalEntryId);
   }
 
-  getAccountActivity(tenantId: string, filters: LedgerReadFilters): AccountActivityLine[] {
-    const normalized = this.normalizeReadFilters(filters);
-    const entries = this.listFilteredEntries(tenantId, normalized);
-    const activity: AccountActivityLine[] = [];
-    const runningBalanceByAccount = new Map<string, number>();
+  createManualJournalEntry(
+    tenantId: string,
+    actorRole: UserRole,
+    payload: CreateManualJournalEntryDto,
+    requestIdempotencyKey?: string
+  ): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    this.assertManualPostingRole(actorRole);
+    const sourceId = payload.source_id?.trim();
+    if (!sourceId) {
+      throw new BadRequestException('source_id is required');
+    }
 
-    for (const entry of entries) {
-      for (const line of entry.lines) {
-        if (normalized.account_code && line.account_code !== normalized.account_code) {
-          continue;
-        }
-
-        const signedAmount = line.direction === 'debit' ? line.amount_minor : -line.amount_minor;
-        const priorBalance = runningBalanceByAccount.get(line.account_code) ?? 0;
-        const runningBalance = priorBalance + signedAmount;
-        runningBalanceByAccount.set(line.account_code, runningBalance);
-
-        activity.push({
-          journal_entry_id: entry.id,
-          line_number: line.line_number,
-          entry_date: entry.entry_date,
-          created_at: entry.created_at,
-          source_type: entry.source_type,
-          source_id: entry.source_id,
-          source_event_id: entry.source_event_id,
-          event_name: entry.event_name,
-          account_code: line.account_code,
-          account_name: line.account_name,
-          direction: line.direction,
-          amount_minor: line.amount_minor,
-          debit_minor: line.direction === 'debit' ? line.amount_minor : 0,
-          credit_minor: line.direction === 'credit' ? line.amount_minor : 0,
-          signed_amount_minor: signedAmount,
-          running_balance_minor: runningBalance,
-          currency_code: line.currency_code,
-          reference: this.buildReference(entry)
-        });
+    const sourceEventId = this.createDeterministicId('manual-journal', tenantId, sourceId, payload.entry_date, payload.currency_code, JSON.stringify(payload.lines));
+    const requestKey = requestIdempotencyKey?.trim();
+    if (requestKey) {
+      const existing = this.ledgerRepository.findByRequestIdempotency(tenantId, requestKey);
+      if (existing) {
+        return Promise.resolve(existing);
       }
     }
 
-    return activity;
+    return this.post({
+      tenant_id: tenantId,
+      source_type: 'manual_journal_entry',
+      source_id: sourceId,
+      source_event_id: sourceEventId,
+      event_name: 'accounting.manual.journal.posted.v1',
+      rule_version: 'manual.v1',
+      entry_date: payload.entry_date,
+      currency_code: payload.currency_code,
+      description: payload.description ?? 'Manual journal entry',
+      entries: payload.lines.map((line) => ({
+        account_code: line.account_code,
+        account_name: line.account_name,
+        direction: line.direction,
+        amount_minor: line.amount_minor,
+        currency_code: payload.currency_code
+      }))
+    }).then((created) => {
+      if (requestKey) {
+        this.ledgerRepository.bindRequestIdempotency(tenantId, requestKey, created.id);
+      }
+      return created;
+    });
   }
 
-  getTrialBalance(tenantId: string, filters: LedgerReadFilters): {
-    accounts: TrialBalanceAccountRow[];
-    totals: { debit_total_minor: number; credit_total_minor: number; net_minor: number };
-  } {
-    const normalized = this.normalizeReadFilters(filters);
-    const entries = this.listFilteredEntries(tenantId, normalized);
-    const accountTotals = new Map<string, TrialBalanceAccountRow>();
+  createAdjustmentEntry(
+    tenantId: string,
+    actorRole: UserRole,
+    payload: CreateAdjustmentEntryDto,
+    requestIdempotencyKey?: string
+  ): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    this.assertManualPostingRole(actorRole);
+    const sourceId = payload.source_id?.trim();
+    if (!sourceId) {
+      throw new BadRequestException('source_id is required');
+    }
 
-    for (const entry of entries) {
-      for (const line of entry.lines) {
-        if (normalized.account_code && line.account_code !== normalized.account_code) {
-          continue;
-        }
-
-        const current = accountTotals.get(line.account_code) ?? {
-          account_code: line.account_code,
-          account_name: line.account_name,
-          debit_total_minor: 0,
-          credit_total_minor: 0,
-          net_minor: 0,
-          currency_code: line.currency_code,
-          line_count: 0
-        };
-
-        if (line.direction === 'debit') {
-          current.debit_total_minor += line.amount_minor;
-          current.net_minor += line.amount_minor;
-        } else {
-          current.credit_total_minor += line.amount_minor;
-          current.net_minor -= line.amount_minor;
-        }
-        current.line_count += 1;
-        accountTotals.set(line.account_code, current);
+    const adjustmentReference = payload.adjusts_journal_entry_id?.trim() || null;
+    if (adjustmentReference) {
+      const referencedEntry = this.ledgerRepository.findById(tenantId, adjustmentReference);
+      if (!referencedEntry) {
+        throw new BadRequestException(`Referenced journal_entry ${adjustmentReference} was not found`);
       }
     }
 
-    const accounts = Array.from(accountTotals.values())
-      .sort((left, right) => left.account_code.localeCompare(right.account_code))
-      .map((row) => this.freezeReadModel(row));
-    const totals = accounts.reduce(
-      (acc, row) => {
-        acc.debit_total_minor += row.debit_total_minor;
-        acc.credit_total_minor += row.credit_total_minor;
-        acc.net_minor += row.net_minor;
-        return acc;
-      },
-      { debit_total_minor: 0, credit_total_minor: 0, net_minor: 0 }
+    const sourceEventId = this.createDeterministicId('adjustment-journal', tenantId, sourceId, payload.entry_date, payload.currency_code, JSON.stringify(payload.lines), adjustmentReference ?? 'none');
+
+    return this.post({
+      tenant_id: tenantId,
+      source_type: 'adjustment_journal_entry',
+      source_id: sourceId,
+      source_event_id: sourceEventId,
+      event_name: 'accounting.adjustment.journal.posted.v1',
+      rule_version: 'manual-adjustment.v1',
+      entry_date: payload.entry_date,
+      currency_code: payload.currency_code,
+      description: payload.description ?? `Adjustment entry${adjustmentReference ? ` for ${adjustmentReference}` : ''}`,
+      metadata: adjustmentReference ? { adjustment_of_journal_entry_id: adjustmentReference } : null,
+      entries: payload.lines.map((line) => ({
+        account_code: line.account_code,
+        account_name: line.account_name,
+        direction: line.direction,
+        amount_minor: line.amount_minor,
+        currency_code: payload.currency_code
+      }))
+    }).then((created) => {
+      const requestKey = requestIdempotencyKey?.trim();
+      if (requestKey) {
+        this.ledgerRepository.bindRequestIdempotency(tenantId, requestKey, created.id);
+      }
+
+      return created;
+    });
+  }
+
+  createReversalEntry(
+    tenantId: string,
+    actorRole: UserRole,
+    originalJournalEntryId: string,
+    payload: CreateReversalEntryDto,
+    requestIdempotencyKey?: string
+  ): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    this.assertManualPostingRole(actorRole);
+    const original = this.ledgerRepository.findById(tenantId, originalJournalEntryId);
+    if (!original) {
+      throw new BadRequestException(`journal_entry ${originalJournalEntryId} was not found`);
+    }
+
+    const normalizedSourceId = payload.source_id?.trim();
+    if (!normalizedSourceId) {
+      throw new BadRequestException('source_id is required');
+    }
+
+    const sourceEventId = this.createDeterministicId(
+      'reversal-journal',
+      tenantId,
+      original.id,
+      normalizedSourceId,
+      payload.reversal_date,
+      original.source_event_id,
+      original.rule_version
     );
 
-    return this.freezeReadModel({ accounts, totals });
-  }
-
-  getJournalDetails(tenantId: string, filters: LedgerReadFilters): JournalDetailRow[] {
-    const normalized = this.normalizeReadFilters(filters);
-    const entries = this.listFilteredEntries(tenantId, normalized);
-
-    return this.freezeReadModel(entries.map((entry) => {
-      const debitTotal = entry.lines.filter((line) => line.direction === 'debit').reduce((sum, line) => sum + line.amount_minor, 0);
-      const creditTotal = entry.lines.filter((line) => line.direction === 'credit').reduce((sum, line) => sum + line.amount_minor, 0);
-      return {
-        journal_entry_id: entry.id,
-        entry_date: entry.entry_date,
-        created_at: entry.created_at,
-        source_type: entry.source_type,
-        source_id: entry.source_id,
-        source_event_id: entry.source_event_id,
-        event_name: entry.event_name,
-        description: entry.description,
-        reference: this.buildReference(entry),
-        currency_code: entry.currency_code,
-        lines: entry.lines,
-        debit_total_minor: debitTotal,
-        credit_total_minor: creditTotal
-      };
-    }));
-  }
-
-
-  private listFilteredEntries(tenantId: string, filters: Required<LedgerReadFilters>): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
-    const baseEntries = filters.account_code
-      ? this.ledgerRepository.listEntriesByAccount(tenantId, filters.account_code)
-      : this.ledgerRepository.listEntries(tenantId);
-
-    return baseEntries
-      .filter((entry) => !filters.date_from || entry.entry_date >= filters.date_from)
-      .filter((entry) => !filters.date_to || entry.entry_date <= filters.date_to)
-      .filter((entry) => {
-        if (!filters.reference) {
-          return true;
-        }
-
-        const needle = filters.reference.toLowerCase();
-        return [entry.id, entry.source_id, entry.source_event_id, entry.description ?? '', this.buildReference(entry)]
-          .some((value) => value.toLowerCase().includes(needle));
-      })
-      .sort((left, right) => left.entry_date.localeCompare(right.entry_date) || left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
-  }
-
-  private normalizeReadFilters(filters: LedgerReadFilters): Required<LedgerReadFilters> {
-    const dateFrom = filters.date_from?.trim() || '';
-    const dateTo = filters.date_to?.trim() || '';
-    if (dateFrom && !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
-      throw new BadRequestException('date_from must be in YYYY-MM-DD format');
-    }
-    if (dateTo && !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
-      throw new BadRequestException('date_to must be in YYYY-MM-DD format');
-    }
-    if (dateFrom && dateTo && dateFrom > dateTo) {
-      throw new BadRequestException('date_from must be less than or equal to date_to');
-    }
-
-    return {
-      date_from: dateFrom,
-      date_to: dateTo,
-      account_code: filters.account_code?.trim() || '',
-      reference: filters.reference?.trim() || ''
-    };
-  }
-
-  private buildReference(entry: Pick<JournalEntryEntity, 'source_type' | 'source_id' | 'source_event_id'>): string {
-    return `${entry.source_type}:${entry.source_id}:${entry.source_event_id}`;
-  }
-
-  private freezeReadModel<T>(value: T): T {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        this.freezeReadModel(item);
+    return this.post({
+      tenant_id: tenantId,
+      source_type: 'reversal_journal_entry',
+      source_id: normalizedSourceId,
+      source_event_id: sourceEventId,
+      event_name: 'accounting.journal.reversed.v1',
+      rule_version: 'manual-reversal.v1',
+      entry_date: payload.reversal_date,
+      currency_code: original.currency_code,
+      description: payload.reason?.trim() || `Reversal of ${original.id}`,
+      metadata: {
+        reversal_of_journal_entry_id: original.id,
+        reversal_of_source_event_id: original.source_event_id
+      },
+      entries: original.lines.map((line) => ({
+        account_code: line.account_code,
+        account_name: line.account_name,
+        direction: line.direction === 'debit' ? 'credit' : 'debit',
+        amount_minor: line.amount_minor,
+        currency_code: line.currency_code
+      }))
+    }).then((created) => {
+      const requestKey = requestIdempotencyKey?.trim();
+      if (requestKey) {
+        this.ledgerRepository.bindRequestIdempotency(tenantId, requestKey, created.id);
       }
-      Object.freeze(value);
-      return value;
-    }
-
-    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-      for (const nested of Object.values(value as Record<string, unknown>)) {
-        this.freezeReadModel(nested);
-      }
-      Object.freeze(value);
-    }
-
-    return value;
+      return created;
+    });
   }
 
-  private validateAndNormalize(transaction: PostingTransactionInput): PostingTransactionInput & { created_at: string; description: string | null } {
+  private validateAndNormalize(transaction: PostingTransactionInput): PostingTransactionInput & { created_at: string; description: string | null; metadata: Record<string, unknown> | null } {
     if (!transaction.tenant_id?.trim()) {
       throw new BadRequestException('tenant_id is required');
     }
@@ -556,6 +533,7 @@ export class LedgerService {
       entry_date: transaction.entry_date,
       currency_code: currencyCode,
       description: transaction.description?.trim() || null,
+      metadata: transaction.metadata ?? null,
       entries,
       created_at: new Date().toISOString()
     };
@@ -779,6 +757,9 @@ export class LedgerService {
 
   private validateRequiredAccounts(eventName: string, entries: PostingLineInput[]): void {
     const requiredAccountCodes = EVENT_REQUIRED_ACCOUNT_CODES.get(eventName) ?? [];
+    if (requiredAccountCodes.length === 0) {
+      return;
+    }
     const entryAccountCodes = new Set(entries.map((entry) => entry.account_code));
     const covered = requiredAccountCodes.some((code) => entryAccountCodes.has(code));
 
@@ -800,6 +781,12 @@ export class LedgerService {
       throw new Error(`Incomplete chart of accounts: duplicate account ${fieldName} ${value}`);
     }
     seenValues.add(value);
+  }
+
+  private assertManualPostingRole(actorRole: UserRole): void {
+    if (actorRole !== 'admin') {
+      throw new ForbiddenException('manual journal operations are restricted to admin role');
+    }
   }
 
   private createDeterministicId(...parts: string[]): string {

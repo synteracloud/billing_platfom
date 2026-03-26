@@ -1,7 +1,9 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Param, Post, Req } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface';
-import { LedgerReadQueryDto } from './dto/ledger-read-query.dto';
+import { LedgerService } from './ledger.service';
+import { CreateReversalEntryDto } from './dto/create-reversal-entry.dto';
+import { CreateAdjustmentEntryDto, CreateManualJournalEntryDto } from './dto/manual-journal-entry.dto';
 import { PostJournalDto } from './dto/post-journal.dto';
 import { LedgerService } from './ledger.service';
 
@@ -19,38 +21,36 @@ export class LedgerController {
     };
   }
 
-  @Get('activity')
-  getAccountActivity(@Req() req: AuthenticatedRequest, @Query() query: LedgerReadQueryDto) {
+  @Post('manual-entries')
+  @HttpCode(HttpStatus.CREATED)
+  async createManualJournal(@Req() req: AuthenticatedRequest, @Body() body: CreateManualJournalEntryDto) {
     return {
-      data: this.ledgerService.getAccountActivity(req.auth!.tenant_id, query),
-      meta: { request_id: randomUUID(), read_only: true, source_of_truth: 'ledger' },
+      data: this.ledgerService.createManualJournalEntry(req.auth!.tenant_id, req.auth!.role, body, req.idempotency?.key),
+      meta: { request_id: randomUUID() },
       error: null
     };
   }
 
-  @Get('trial-balance')
-  getTrialBalance(@Req() req: AuthenticatedRequest, @Query() query: LedgerReadQueryDto) {
+  @Post('adjustments')
+  @HttpCode(HttpStatus.CREATED)
+  async createAdjustmentEntry(@Req() req: AuthenticatedRequest, @Body() body: CreateAdjustmentEntryDto) {
     return {
-      data: this.ledgerService.getTrialBalance(req.auth!.tenant_id, query),
-      meta: { request_id: randomUUID(), read_only: true, source_of_truth: 'ledger' },
+      data: this.ledgerService.createAdjustmentEntry(req.auth!.tenant_id, req.auth!.role, body, req.idempotency?.key),
+      meta: { request_id: randomUUID() },
       error: null
     };
   }
 
-  @Get('journals')
-  getJournalDetails(@Req() req: AuthenticatedRequest, @Query() query: LedgerReadQueryDto) {
+  @Post('entries/:journal_entry_id/reversal')
+  @HttpCode(HttpStatus.CREATED)
+  async createReversalEntry(
+    @Req() req: AuthenticatedRequest,
+    @Param('journal_entry_id') journalEntryId: string,
+    @Body() body: CreateReversalEntryDto
+  ) {
     return {
-      data: this.ledgerService.getJournalDetails(req.auth!.tenant_id, query),
-      meta: { request_id: randomUUID(), read_only: true, source_of_truth: 'ledger' },
-      error: null
-    };
-  }
-
-  @Get('journals/:journalEntryId')
-  getJournalDetailById(@Req() req: AuthenticatedRequest, @Param('journalEntryId') journalEntryId: string) {
-    return {
-      data: this.ledgerService.getJournalEntry(req.auth!.tenant_id, journalEntryId),
-      meta: { request_id: randomUUID(), read_only: true, source_of_truth: 'ledger' },
+      data: this.ledgerService.createReversalEntry(req.auth!.tenant_id, req.auth!.role, journalEntryId, body, req.idempotency?.key),
+      meta: { request_id: randomUUID() },
       error: null
     };
   }

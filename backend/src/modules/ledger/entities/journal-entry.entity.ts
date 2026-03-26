@@ -9,5 +9,6 @@ export interface JournalEntryEntity {
   entry_date: string;
   currency_code: string;
   description: string | null;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
 }
