@@ -77,6 +77,61 @@ export interface PostingLineInput {
   currency_code: string;
 }
 
+
+export interface LedgerReadFilters {
+  date_from?: string;
+  date_to?: string;
+  account_code?: string;
+  reference?: string;
+}
+
+export interface AccountActivityLine {
+  journal_entry_id: string;
+  line_number: number;
+  entry_date: string;
+  created_at: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  event_name: string;
+  account_code: string;
+  account_name: string;
+  direction: JournalLineDirection;
+  amount_minor: number;
+  debit_minor: number;
+  credit_minor: number;
+  signed_amount_minor: number;
+  running_balance_minor: number;
+  currency_code: string;
+  reference: string;
+}
+
+export interface TrialBalanceAccountRow {
+  account_code: string;
+  account_name: string;
+  debit_total_minor: number;
+  credit_total_minor: number;
+  net_minor: number;
+  currency_code: string;
+  line_count: number;
+}
+
+export interface JournalDetailRow {
+  journal_entry_id: string;
+  entry_date: string;
+  created_at: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  event_name: string;
+  description: string | null;
+  reference: string;
+  currency_code: string;
+  lines: JournalLineEntity[];
+  debit_total_minor: number;
+  credit_total_minor: number;
+}
+
 export interface PostingTransactionInput {
   tenant_id: string;
   source_type: string;

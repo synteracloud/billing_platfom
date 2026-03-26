@@ -5,6 +5,7 @@ import { LedgerService } from './ledger.service';
 import { CreateReversalEntryDto } from './dto/create-reversal-entry.dto';
 import { CreateAdjustmentEntryDto, CreateManualJournalEntryDto } from './dto/manual-journal-entry.dto';
 import { PostJournalDto } from './dto/post-journal.dto';
+import { LedgerService } from './ledger.service';
 
 @Controller('api/v1/ledger')
 export class LedgerController {
