@@ -3,12 +3,15 @@ import { Req } from '@nestjs/common/decorators';
 import { randomUUID } from 'crypto';
 import { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface';
 import { CashflowService } from './cashflow.service';
+import { RequirePermissions } from '../auth/permissions.decorator';
+import { PERMISSIONS } from '../auth/permissions';
 
 @Controller('api/v1/reports/cashflow')
 export class CashflowController {
   constructor(private readonly cashflowService: CashflowService) {}
 
   @Get()
+  @RequirePermissions(PERMISSIONS.VIEW_REPORTS)
   getCashflow(
     @Req() req: AuthenticatedRequest,
     @Query('period_from') periodFrom: string,

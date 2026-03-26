@@ -1,4 +1,5 @@
-export type UserRole = 'admin' | 'member';
+import { UserRole } from '../../../common/interfaces/authenticated-request.interface';
+
 export type UserStatus = 'active' | 'deactivated';
 
 export interface UserEntity {

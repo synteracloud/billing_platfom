@@ -3,6 +3,8 @@ import { AuthenticatedRequest } from '../../common/interfaces/authenticated-requ
 import { CreateManualMatchDto } from './dto/create-manual-match.dto';
 import { CreateReconciliationSuggestionsDto } from './dto/reconciliation-suggestions.dto';
 import { ReconciliationService } from './reconciliation.service';
+import { RequirePermissions } from '../auth/permissions.decorator';
+import { PERMISSIONS } from '../auth/permissions';
 
 @Controller('api/v1/reconciliation')
 export class ReconciliationController {
@@ -24,11 +26,13 @@ export class ReconciliationController {
   }
 
   @Post('matches/manual')
+  @RequirePermissions(PERMISSIONS.APPROVE_RECONCILIATION_MANUAL_OVERRIDES)
   createManualMatch(@Req() request: AuthenticatedRequest, @Body() body: CreateManualMatchDto) {
     return this.reconciliationService.createManualMatch(request.tenant.id, body);
   }
 
   @Post('suggestions')
+  @RequirePermissions(PERMISSIONS.APPROVE_RECONCILIATION_MANUAL_OVERRIDES)
   suggestMatches(@Req() request: AuthenticatedRequest, @Body() body: CreateReconciliationSuggestionsDto) {
     const tenantScopedBody: CreateReconciliationSuggestionsDto = {
       unmatched_transactions: body.unmatched_transactions.map((item) => ({ ...item, tenant_id: request.tenant.id })),
