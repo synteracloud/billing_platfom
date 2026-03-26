@@ -100,7 +100,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/payments', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/allocate', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/void', method: RequestMethod.POST },
-      { path: 'api/v1/ledger/postings', method: RequestMethod.POST }
+      { path: 'api/v1/ledger/postings', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/manual-entries', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/adjustments', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/entries/:journal_entry_id/reversal', method: RequestMethod.POST }
     );
 
 
