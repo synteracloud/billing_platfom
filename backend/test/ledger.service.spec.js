@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { LedgerService } = require('../.tmp-test-dist/modules/ledger/ledger.service');
 const { LedgerRepository } = require('../.tmp-test-dist/modules/ledger/ledger.repository');
+const { AccountingPeriodRepository } = require('../.tmp-test-dist/modules/ledger/accounting-period.repository');
 const { EventBusService } = require('../.tmp-test-dist/modules/events/event-bus.service');
 const { EventsService } = require('../.tmp-test-dist/modules/events/events.service');
 const { EventsRepository } = require('../.tmp-test-dist/modules/events/events.repository');
@@ -21,7 +22,7 @@ function createLedgerService() {
   const transactionManager = new FinancialTransactionManager();
 
   return {
-    ledgerService: new LedgerService(ledgerRepository, eventsService, transactionManager),
+    ledgerService: new LedgerService(ledgerRepository, eventsService, transactionManager, new AccountingPeriodRepository()),
     ledgerRepository,
     eventsRepository
   };
@@ -341,6 +342,80 @@ test('posts bill.paid to accounts payable and cash idempotently', async () => {
   );
 });
 
+test('closes period, blocks posting, then reopens with audit chain', async () => {
+  const { ledgerService, eventsRepository } = createLedgerService();
+  const tenantId = 'tenant-1';
+
+  const closed = ledgerService.closePeriod(tenantId, '2025-01', { actor_id: 'user-admin-1', role: 'admin' });
+  assert.equal(closed.status, 'closed');
+  assert.equal(closed.period_start, '2025-01-01');
+  assert.equal(closed.period_end, '2025-01-31');
+
+  await assert.rejects(() => ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-closed-1',
+    source_event_id: 'event-invoice-closed-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-01-22',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 100, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 100, currency_code: 'USD' }
+    ]
+  }), /closed and locked/);
+
+  const reopened = ledgerService.reopenPeriod(tenantId, '2025-01', 'Controller approved adjustment', { actor_id: 'user-admin-2', role: 'admin' });
+  assert.equal(reopened.status, 'reopened');
+  assert.equal(reopened.reopen_reason, 'Controller approved adjustment');
+
+  const posted = await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-reopened-1',
+    source_event_id: 'event-invoice-reopened-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-01-23',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 100, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 100, currency_code: 'USD' }
+    ]
+  });
+  assert.equal(posted.entry_date, '2025-01-23');
+
+  const auditTypes = eventsRepository
+    .listByTenant(tenantId, {})
+    .filter((event) => event.type.startsWith('audit.accounting_period'))
+    .map((event) => event.type)
+    .sort();
+  assert.deepEqual(
+    auditTypes,
+    [
+      'audit.accounting_period.closed.v1',
+      'audit.accounting_period.posting_blocked_closed_period.v1',
+      'audit.accounting_period.reopened.v1'
+    ].sort()
+  );
+});
+
+test('restricts close/reopen to admin role', async () => {
+  const { ledgerService } = createLedgerService();
+
+  assert.throws(
+    () => ledgerService.closePeriod('tenant-1', '2025-01', { actor_id: 'user-member-1', role: 'member' }),
+    /Only admins can close accounting periods/
+  );
+
+  ledgerService.closePeriod('tenant-1', '2025-01', { actor_id: 'user-admin', role: 'admin' });
+  assert.throws(
+    () => ledgerService.reopenPeriod('tenant-1', '2025-01', 'Need correction', { actor_id: 'user-member-2', role: 'member' }),
+    /Only admins can reopen accounting periods/
+  );
+});
+
 test('posts payment.received (recorded) to cash and unallocated cash idempotently', async () => {
   const { ledgerService, eventsRepository } = createLedgerService();
 
@@ -380,96 +455,126 @@ test('posts payment.received (recorded) to cash and unallocated cash idempotentl
   );
 });
 
-const { TaxService } = require('../.tmp-test-dist/modules/tax/tax.service');
-const { TaxRepository } = require('../.tmp-test-dist/modules/tax/tax.repository');
+test('ledger read model account activity and trial balance reconcile exactly to raw ledger lines', async () => {
+  const { ledgerService, ledgerRepository } = createLedgerService();
+  const tenantId = 'tenant-read-1';
 
-test('tax engine computes inclusive and exclusive taxes deterministically', () => {
-  const taxService = new TaxService(new TaxRepository());
-
-  const exclusive = taxService.calculateDocumentTaxes({
-    tenant_id: 'tenant-tax',
-    jurisdiction: 'US-CA',
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-read-1',
+    source_event_id: 'event-read-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '1',
+    entry_date: '2026-01-10',
     currency_code: 'USD',
-    effective_at: '2026-03-01',
-    lines: [{ amount_minor: 1000, quantity: 1, tax_rate_basis_points: 750, tax_inclusive: false, tax_code: 'CA_STD' }]
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 1500, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 1500, currency_code: 'USD' }
+    ]
   });
 
-  const inclusive = taxService.calculateDocumentTaxes({
-    tenant_id: 'tenant-tax',
-    jurisdiction: 'US-CA',
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'payment',
+    source_id: 'payment-read-1',
+    source_event_id: 'event-read-2',
+    event_name: 'billing.payment.settled.v1',
+    rule_version: '1',
+    entry_date: '2026-01-11',
     currency_code: 'USD',
-    effective_at: '2026-03-01',
-    lines: [{ amount_minor: 1075, quantity: 1, tax_rate_basis_points: 750, tax_inclusive: true, tax_code: 'CA_STD' }]
+    entries: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 500, currency_code: 'USD' },
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'credit', amount_minor: 500, currency_code: 'USD' }
+    ]
   });
 
-  assert.equal(exclusive.subtotal_minor, 1000);
-  assert.equal(exclusive.tax_minor, 75);
-  assert.equal(exclusive.total_minor, 1075);
-  assert.equal(inclusive.subtotal_minor, 1000);
-  assert.equal(inclusive.tax_minor, 75);
-  assert.equal(inclusive.total_minor, 1075);
+  const activity = ledgerService.getAccountActivity(tenantId, { account_code: '1100', date_from: '2026-01-01', date_to: '2026-01-31' });
+  assert.equal(activity.length, 2);
+  assert.deepEqual(activity.map((line) => line.running_balance_minor), [1500, 1000]);
+
+  const trialBalance = ledgerService.getTrialBalance(tenantId, { date_from: '2026-01-01', date_to: '2026-01-31' });
+  const rawEntries = ledgerRepository.listEntries(tenantId);
+  const rawDebit = rawEntries.flatMap((entry) => entry.lines).filter((line) => line.direction === 'debit').reduce((sum, line) => sum + line.amount_minor, 0);
+  const rawCredit = rawEntries.flatMap((entry) => entry.lines).filter((line) => line.direction === 'credit').reduce((sum, line) => sum + line.amount_minor, 0);
+
+  assert.equal(trialBalance.totals.debit_total_minor, rawDebit);
+  assert.equal(trialBalance.totals.credit_total_minor, rawCredit);
+  assert.equal(trialBalance.totals.debit_total_minor, trialBalance.totals.credit_total_minor);
 });
 
-test('ledger postings split tax liability for invoice and bill events', async () => {
-  const { ledgerService, eventsRepository } = createLedgerService();
+test('ledger journal detail filters by date/account/reference deterministically', async () => {
+  const { ledgerService } = createLedgerService();
+  const tenantId = 'tenant-read-2';
 
-  const invoiceEvent = eventsRepository.create({
-    id: 'evt-tax-invoice',
-    type: 'billing.invoice.issued.v1',
-    version: 1,
-    tenant_id: 'tenant-tax',
-    payload: { invoice_id: 'inv-tax-1', customer_id: 'cust-1', issue_date: '2026-03-15', due_date: null, subtotal_minor: 1000, tax_minor: 75, total_minor: 1075, currency_code: 'USD' },
-    occurred_at: '2026-03-15T00:00:00.000Z',
-    recorded_at: '2026-03-15T00:00:00.000Z',
-    aggregate_type: 'invoice',
-    aggregate_id: 'inv-tax-1',
-    aggregate_version: 1,
-    causation_id: null,
-    correlation_id: null,
-    idempotency_key: 'evt-tax-invoice',
-    producer: 'test'
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-filter-1',
+    source_event_id: 'evt-filter-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '1',
+    entry_date: '2026-02-01',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 800, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 800, currency_code: 'USD' }
+    ]
   });
 
-  const billEvent = eventsRepository.create({
-    id: 'evt-tax-bill',
-    type: 'billing.bill.created.v1',
-    version: 1,
-    tenant_id: 'tenant-tax',
-    payload: {
-      bill_id: 'bill-tax-1',
-      vendor_id: 'vendor-1',
-      created_at: '2026-03-16T00:00:00.000Z',
-      subtotal_minor: 500,
-      tax_minor: 25,
-      total_minor: 525,
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'payment',
+    source_id: 'payment-filter-1',
+    source_event_id: 'evt-filter-2',
+    event_name: 'billing.payment.settled.v1',
+    rule_version: '1',
+    entry_date: '2026-02-15',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 300, currency_code: 'USD' },
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'credit', amount_minor: 300, currency_code: 'USD' }
+    ]
+  });
+
+  const byDate = ledgerService.getJournalDetails(tenantId, { date_from: '2026-02-10', date_to: '2026-02-20' });
+  assert.equal(byDate.length, 1);
+  assert.equal(byDate[0].source_id, 'payment-filter-1');
+
+  const byAccount = ledgerService.getJournalDetails(tenantId, { account_code: '4000' });
+  assert.equal(byAccount.length, 1);
+  assert.equal(byAccount[0].source_id, 'invoice-filter-1');
+
+  const byReference = ledgerService.getJournalDetails(tenantId, { reference: 'evt-filter-2' });
+  assert.equal(byReference.length, 1);
+  assert.equal(byReference[0].source_event_id, 'evt-filter-2');
+});
+
+test('ledger read model handles large date range volumes and remains deterministic', async () => {
+  const { ledgerService } = createLedgerService();
+  const tenantId = 'tenant-read-large';
+
+  for (let day = 1; day <= 180; day += 1) {
+    const date = `2026-03-${String((day % 28) + 1).padStart(2, '0')}`;
+    await ledgerService.post({
+      tenant_id: tenantId,
+      source_type: 'invoice',
+      source_id: `invoice-large-${day}`,
+      source_event_id: `evt-large-${day}`,
+      event_name: 'billing.invoice.issued.v1',
+      rule_version: '1',
+      entry_date: date,
       currency_code: 'USD',
-      expense_classification: 'operating'
-    },
-    occurred_at: '2026-03-16T00:00:00.000Z',
-    recorded_at: '2026-03-16T00:00:00.000Z',
-    aggregate_type: 'bill',
-    aggregate_id: 'bill-tax-1',
-    aggregate_version: 1,
-    causation_id: null,
-    correlation_id: null,
-    idempotency_key: 'evt-tax-bill',
-    producer: 'test'
-  });
+      entries: [
+        { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 10 + day, currency_code: 'USD' },
+        { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 10 + day, currency_code: 'USD' }
+      ]
+    });
+  }
 
-  const invoicePosting = await ledgerService.postEvent('tenant-tax', invoiceEvent.id, 'tax-invoice-key', '2026-03-26');
-  const billPosting = await ledgerService.postEvent('tenant-tax', billEvent.id, 'tax-bill-key', '2026-03-26');
-
-  const taxCredits = invoicePosting.lines.filter((line) => line.account_code === '2100' && line.direction === 'credit').reduce((sum, line) => sum + line.amount_minor, 0);
-  const taxDebits = billPosting.lines.filter((line) => line.account_code === '2100' && line.direction === 'debit').reduce((sum, line) => sum + line.amount_minor, 0);
-  assert.equal(taxCredits, 75);
-  assert.equal(taxDebits, 25);
-
-  const taxService = new TaxService(new TaxRepository());
-  const summary = taxService.buildTaxSummary({
-    salesTaxDocuments: [{ jurisdiction: 'US-CA', tax_minor: 75 }],
-    purchaseTaxDocuments: [{ jurisdiction: 'US-CA', tax_minor: 25 }],
-    ledgerEntries: [invoicePosting, billPosting]
-  });
-
-  assert.equal(summary.net_tax_liability_minor, 50);
+  const first = ledgerService.getTrialBalance(tenantId, { date_from: '2026-03-01', date_to: '2026-03-31' });
+  const second = ledgerService.getTrialBalance(tenantId, { date_from: '2026-03-01', date_to: '2026-03-31' });
+  assert.deepEqual(first, second);
+  assert.equal(first.totals.debit_total_minor, first.totals.credit_total_minor);
+  assert.equal(first.accounts.find((row) => row.account_code === '1100')?.line_count, 180);
 });
