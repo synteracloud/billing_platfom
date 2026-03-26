@@ -379,3 +379,127 @@ test('posts payment.received (recorded) to cash and unallocated cash idempotentl
     ]
   );
 });
+
+test('ledger read model account activity and trial balance reconcile exactly to raw ledger lines', async () => {
+  const { ledgerService, ledgerRepository } = createLedgerService();
+  const tenantId = 'tenant-read-1';
+
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-read-1',
+    source_event_id: 'event-read-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '1',
+    entry_date: '2026-01-10',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 1500, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 1500, currency_code: 'USD' }
+    ]
+  });
+
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'payment',
+    source_id: 'payment-read-1',
+    source_event_id: 'event-read-2',
+    event_name: 'billing.payment.settled.v1',
+    rule_version: '1',
+    entry_date: '2026-01-11',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 500, currency_code: 'USD' },
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'credit', amount_minor: 500, currency_code: 'USD' }
+    ]
+  });
+
+  const activity = ledgerService.getAccountActivity(tenantId, { account_code: '1100', date_from: '2026-01-01', date_to: '2026-01-31' });
+  assert.equal(activity.length, 2);
+  assert.deepEqual(activity.map((line) => line.running_balance_minor), [1500, 1000]);
+
+  const trialBalance = ledgerService.getTrialBalance(tenantId, { date_from: '2026-01-01', date_to: '2026-01-31' });
+  const rawEntries = ledgerRepository.listEntries(tenantId);
+  const rawDebit = rawEntries.flatMap((entry) => entry.lines).filter((line) => line.direction === 'debit').reduce((sum, line) => sum + line.amount_minor, 0);
+  const rawCredit = rawEntries.flatMap((entry) => entry.lines).filter((line) => line.direction === 'credit').reduce((sum, line) => sum + line.amount_minor, 0);
+
+  assert.equal(trialBalance.totals.debit_total_minor, rawDebit);
+  assert.equal(trialBalance.totals.credit_total_minor, rawCredit);
+  assert.equal(trialBalance.totals.debit_total_minor, trialBalance.totals.credit_total_minor);
+});
+
+test('ledger journal detail filters by date/account/reference deterministically', async () => {
+  const { ledgerService } = createLedgerService();
+  const tenantId = 'tenant-read-2';
+
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-filter-1',
+    source_event_id: 'evt-filter-1',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '1',
+    entry_date: '2026-02-01',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 800, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 800, currency_code: 'USD' }
+    ]
+  });
+
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'payment',
+    source_id: 'payment-filter-1',
+    source_event_id: 'evt-filter-2',
+    event_name: 'billing.payment.settled.v1',
+    rule_version: '1',
+    entry_date: '2026-02-15',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 300, currency_code: 'USD' },
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'credit', amount_minor: 300, currency_code: 'USD' }
+    ]
+  });
+
+  const byDate = ledgerService.getJournalDetails(tenantId, { date_from: '2026-02-10', date_to: '2026-02-20' });
+  assert.equal(byDate.length, 1);
+  assert.equal(byDate[0].source_id, 'payment-filter-1');
+
+  const byAccount = ledgerService.getJournalDetails(tenantId, { account_code: '4000' });
+  assert.equal(byAccount.length, 1);
+  assert.equal(byAccount[0].source_id, 'invoice-filter-1');
+
+  const byReference = ledgerService.getJournalDetails(tenantId, { reference: 'evt-filter-2' });
+  assert.equal(byReference.length, 1);
+  assert.equal(byReference[0].source_event_id, 'evt-filter-2');
+});
+
+test('ledger read model handles large date range volumes and remains deterministic', async () => {
+  const { ledgerService } = createLedgerService();
+  const tenantId = 'tenant-read-large';
+
+  for (let day = 1; day <= 180; day += 1) {
+    const date = `2026-03-${String((day % 28) + 1).padStart(2, '0')}`;
+    await ledgerService.post({
+      tenant_id: tenantId,
+      source_type: 'invoice',
+      source_id: `invoice-large-${day}`,
+      source_event_id: `evt-large-${day}`,
+      event_name: 'billing.invoice.issued.v1',
+      rule_version: '1',
+      entry_date: date,
+      currency_code: 'USD',
+      entries: [
+        { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 10 + day, currency_code: 'USD' },
+        { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 10 + day, currency_code: 'USD' }
+      ]
+    });
+  }
+
+  const first = ledgerService.getTrialBalance(tenantId, { date_from: '2026-03-01', date_to: '2026-03-31' });
+  const second = ledgerService.getTrialBalance(tenantId, { date_from: '2026-03-01', date_to: '2026-03-31' });
+  assert.deepEqual(first, second);
+  assert.equal(first.totals.debit_total_minor, first.totals.credit_total_minor);
+  assert.equal(first.accounts.find((row) => row.account_code === '1100')?.line_count, 180);
+});

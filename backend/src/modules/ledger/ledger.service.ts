@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
 import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
-import { BillCreatedPayload, BillPaidPayload, DomainEvent, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
+import { BillCreatedPayload, BillPaidPayload, DomainEvent, InvoiceCreatedPayload, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
@@ -69,6 +69,61 @@ export interface PostingLineInput {
   direction: JournalLineDirection;
   amount_minor: number;
   currency_code: string;
+}
+
+
+export interface LedgerReadFilters {
+  date_from?: string;
+  date_to?: string;
+  account_code?: string;
+  reference?: string;
+}
+
+export interface AccountActivityLine {
+  journal_entry_id: string;
+  line_number: number;
+  entry_date: string;
+  created_at: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  event_name: string;
+  account_code: string;
+  account_name: string;
+  direction: JournalLineDirection;
+  amount_minor: number;
+  debit_minor: number;
+  credit_minor: number;
+  signed_amount_minor: number;
+  running_balance_minor: number;
+  currency_code: string;
+  reference: string;
+}
+
+export interface TrialBalanceAccountRow {
+  account_code: string;
+  account_name: string;
+  debit_total_minor: number;
+  credit_total_minor: number;
+  net_minor: number;
+  currency_code: string;
+  line_count: number;
+}
+
+export interface JournalDetailRow {
+  journal_entry_id: string;
+  entry_date: string;
+  created_at: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  event_name: string;
+  description: string | null;
+  reference: string;
+  currency_code: string;
+  lines: JournalLineEntity[];
+  debit_total_minor: number;
+  credit_total_minor: number;
 }
 
 export interface PostingTransactionInput {
@@ -228,6 +283,191 @@ export class LedgerService {
 
   getJournalEntry(tenantId: string, journalEntryId: string): (JournalEntryEntity & { lines: JournalLineEntity[] }) | undefined {
     return this.ledgerRepository.findById(tenantId, journalEntryId);
+  }
+
+  getAccountActivity(tenantId: string, filters: LedgerReadFilters): AccountActivityLine[] {
+    const normalized = this.normalizeReadFilters(filters);
+    const entries = this.listFilteredEntries(tenantId, normalized);
+    const activity: AccountActivityLine[] = [];
+    const runningBalanceByAccount = new Map<string, number>();
+
+    for (const entry of entries) {
+      for (const line of entry.lines) {
+        if (normalized.account_code && line.account_code !== normalized.account_code) {
+          continue;
+        }
+
+        const signedAmount = line.direction === 'debit' ? line.amount_minor : -line.amount_minor;
+        const priorBalance = runningBalanceByAccount.get(line.account_code) ?? 0;
+        const runningBalance = priorBalance + signedAmount;
+        runningBalanceByAccount.set(line.account_code, runningBalance);
+
+        activity.push({
+          journal_entry_id: entry.id,
+          line_number: line.line_number,
+          entry_date: entry.entry_date,
+          created_at: entry.created_at,
+          source_type: entry.source_type,
+          source_id: entry.source_id,
+          source_event_id: entry.source_event_id,
+          event_name: entry.event_name,
+          account_code: line.account_code,
+          account_name: line.account_name,
+          direction: line.direction,
+          amount_minor: line.amount_minor,
+          debit_minor: line.direction === 'debit' ? line.amount_minor : 0,
+          credit_minor: line.direction === 'credit' ? line.amount_minor : 0,
+          signed_amount_minor: signedAmount,
+          running_balance_minor: runningBalance,
+          currency_code: line.currency_code,
+          reference: this.buildReference(entry)
+        });
+      }
+    }
+
+    return activity;
+  }
+
+  getTrialBalance(tenantId: string, filters: LedgerReadFilters): {
+    accounts: TrialBalanceAccountRow[];
+    totals: { debit_total_minor: number; credit_total_minor: number; net_minor: number };
+  } {
+    const normalized = this.normalizeReadFilters(filters);
+    const entries = this.listFilteredEntries(tenantId, normalized);
+    const accountTotals = new Map<string, TrialBalanceAccountRow>();
+
+    for (const entry of entries) {
+      for (const line of entry.lines) {
+        if (normalized.account_code && line.account_code !== normalized.account_code) {
+          continue;
+        }
+
+        const current = accountTotals.get(line.account_code) ?? {
+          account_code: line.account_code,
+          account_name: line.account_name,
+          debit_total_minor: 0,
+          credit_total_minor: 0,
+          net_minor: 0,
+          currency_code: line.currency_code,
+          line_count: 0
+        };
+
+        if (line.direction === 'debit') {
+          current.debit_total_minor += line.amount_minor;
+          current.net_minor += line.amount_minor;
+        } else {
+          current.credit_total_minor += line.amount_minor;
+          current.net_minor -= line.amount_minor;
+        }
+        current.line_count += 1;
+        accountTotals.set(line.account_code, current);
+      }
+    }
+
+    const accounts = Array.from(accountTotals.values())
+      .sort((left, right) => left.account_code.localeCompare(right.account_code))
+      .map((row) => this.freezeReadModel(row));
+    const totals = accounts.reduce(
+      (acc, row) => {
+        acc.debit_total_minor += row.debit_total_minor;
+        acc.credit_total_minor += row.credit_total_minor;
+        acc.net_minor += row.net_minor;
+        return acc;
+      },
+      { debit_total_minor: 0, credit_total_minor: 0, net_minor: 0 }
+    );
+
+    return this.freezeReadModel({ accounts, totals });
+  }
+
+  getJournalDetails(tenantId: string, filters: LedgerReadFilters): JournalDetailRow[] {
+    const normalized = this.normalizeReadFilters(filters);
+    const entries = this.listFilteredEntries(tenantId, normalized);
+
+    return this.freezeReadModel(entries.map((entry) => {
+      const debitTotal = entry.lines.filter((line) => line.direction === 'debit').reduce((sum, line) => sum + line.amount_minor, 0);
+      const creditTotal = entry.lines.filter((line) => line.direction === 'credit').reduce((sum, line) => sum + line.amount_minor, 0);
+      return {
+        journal_entry_id: entry.id,
+        entry_date: entry.entry_date,
+        created_at: entry.created_at,
+        source_type: entry.source_type,
+        source_id: entry.source_id,
+        source_event_id: entry.source_event_id,
+        event_name: entry.event_name,
+        description: entry.description,
+        reference: this.buildReference(entry),
+        currency_code: entry.currency_code,
+        lines: entry.lines,
+        debit_total_minor: debitTotal,
+        credit_total_minor: creditTotal
+      };
+    }));
+  }
+
+
+  private listFilteredEntries(tenantId: string, filters: Required<LedgerReadFilters>): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    const baseEntries = filters.account_code
+      ? this.ledgerRepository.listEntriesByAccount(tenantId, filters.account_code)
+      : this.ledgerRepository.listEntries(tenantId);
+
+    return baseEntries
+      .filter((entry) => !filters.date_from || entry.entry_date >= filters.date_from)
+      .filter((entry) => !filters.date_to || entry.entry_date <= filters.date_to)
+      .filter((entry) => {
+        if (!filters.reference) {
+          return true;
+        }
+
+        const needle = filters.reference.toLowerCase();
+        return [entry.id, entry.source_id, entry.source_event_id, entry.description ?? '', this.buildReference(entry)]
+          .some((value) => value.toLowerCase().includes(needle));
+      })
+      .sort((left, right) => left.entry_date.localeCompare(right.entry_date) || left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+  }
+
+  private normalizeReadFilters(filters: LedgerReadFilters): Required<LedgerReadFilters> {
+    const dateFrom = filters.date_from?.trim() || '';
+    const dateTo = filters.date_to?.trim() || '';
+    if (dateFrom && !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+      throw new BadRequestException('date_from must be in YYYY-MM-DD format');
+    }
+    if (dateTo && !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+      throw new BadRequestException('date_to must be in YYYY-MM-DD format');
+    }
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      throw new BadRequestException('date_from must be less than or equal to date_to');
+    }
+
+    return {
+      date_from: dateFrom,
+      date_to: dateTo,
+      account_code: filters.account_code?.trim() || '',
+      reference: filters.reference?.trim() || ''
+    };
+  }
+
+  private buildReference(entry: Pick<JournalEntryEntity, 'source_type' | 'source_id' | 'source_event_id'>): string {
+    return `${entry.source_type}:${entry.source_id}:${entry.source_event_id}`;
+  }
+
+  private freezeReadModel<T>(value: T): T {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        this.freezeReadModel(item);
+      }
+      Object.freeze(value);
+      return value;
+    }
+
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+      for (const nested of Object.values(value as Record<string, unknown>)) {
+        this.freezeReadModel(nested);
+      }
+      Object.freeze(value);
+    }
+
+    return value;
   }
 
   private validateAndNormalize(transaction: PostingTransactionInput): PostingTransactionInput & { created_at: string; description: string | null } {
