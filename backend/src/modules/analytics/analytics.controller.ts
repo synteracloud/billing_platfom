@@ -2,9 +2,12 @@ import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface';
 import { AnalyticsReadOnlyGuard } from './analytics-readonly.guard';
 import { AnalyticsService } from './analytics.service';
+import { RequirePermissions } from '../auth/permissions.decorator';
+import { PERMISSIONS } from '../auth/permissions';
 
 @Controller('api/v1/analytics')
 @UseGuards(AnalyticsReadOnlyGuard)
+@RequirePermissions(PERMISSIONS.VIEW_REPORTS)
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
@@ -27,6 +30,11 @@ export class AnalyticsController {
   getRunway(@Req() request: AuthenticatedRequest, @Query('horizon_days') horizonDays?: string) {
     const parsed = horizonDays ? Number(horizonDays) : undefined;
     return this.analyticsService.getRunway(request.tenant.id, parsed);
+  }
+
+  @Get('tax-summary')
+  getTaxSummary(@Req() request: AuthenticatedRequest) {
+    return this.analyticsService.getTaxSummary(request.tenant.id);
   }
 
   @Get('anomalies')

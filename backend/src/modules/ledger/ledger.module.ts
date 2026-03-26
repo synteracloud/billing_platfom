@@ -4,18 +4,21 @@ import { EventsModule } from '../events/events.module';
 import { EventQueueModule } from '../events/queue/event-queue.module';
 import { ApprovalModule } from '../approval/approval.module';
 import { LedgerInvoiceCreatedConsumer } from './ledger-invoice-created.consumer';
+import { LedgerController } from './ledger.controller';
 import { LedgerRepository } from './ledger.repository';
 import { LedgerService } from './ledger.service';
 import { PaymentReceivedLedgerConsumer } from './payment-received-ledger.consumer';
 
 @Module({
-  imports: [EventsModule, EventQueueModule, TransactionsModule, ApprovalModule],
+  imports: [EventsModule, EventQueueModule, TransactionsModule],
+  controllers: [LedgerController],
   providers: [
     LedgerRepository,
+    AccountingPeriodRepository,
     LedgerService,
     LedgerInvoiceCreatedConsumer,
     PaymentReceivedLedgerConsumer
   ],
-  exports: [LedgerService, LedgerRepository]
+  exports: [LedgerService, LedgerRepository, AccountingPeriodRepository]
 })
 export class LedgerModule {}

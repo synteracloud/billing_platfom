@@ -25,6 +25,7 @@ import { UsersModule } from './modules/users/module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module';
 import { CashflowModule } from './modules/cashflow/cashflow.module';
+import { TaxModule } from './modules/tax/tax.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { CashflowModule } from './modules/cashflow/cashflow.module';
     LedgerModule,
     IntegrationsModule,
     SubscriptionsModule,
+    StatementsModule,
     DocumentsModule,
     EventsModule,
     AuthModule,
@@ -51,7 +53,8 @@ import { CashflowModule } from './modules/cashflow/cashflow.module';
     AnalyticsModule,
     WebhooksModule,
     ReconciliationModule,
-    CashflowModule
+    CashflowModule,
+    TaxModule
   ]
 })
 export class AppModule implements NestModule {
@@ -70,6 +73,8 @@ export class AppModule implements NestModule {
       { path: 'api/v1/invoices/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/ledger', method: RequestMethod.ALL },
       { path: 'api/v1/ledger/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/integrations', method: RequestMethod.ALL },
+      { path: 'api/v1/integrations/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/payments', method: RequestMethod.ALL },
       { path: 'api/v1/payments/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/subscriptions', method: RequestMethod.ALL },
@@ -84,8 +89,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }
@@ -100,7 +107,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/payments', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/allocate', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/void', method: RequestMethod.POST },
-      { path: 'api/v1/ledger/postings', method: RequestMethod.POST }
+      { path: 'api/v1/ledger/postings', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/manual-entries', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/adjustments', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/entries/:journal_entry_id/reversal', method: RequestMethod.POST }
     );
 
 

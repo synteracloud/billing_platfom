@@ -1,14 +1,16 @@
-import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
+import { UserRole } from '../../common/interfaces/authenticated-request.interface';
 import { DEFAULT_CHART_OF_ACCOUNTS, POSTING_RULE_EXPECTATIONS } from '../accounting/chart-of-accounts.defaults';
 import { AccountDefinition } from '../accounting/entities/chart-of-account.entity';
-import { BillCreatedPayload, BillPaidPayload, DomainEvent, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
+import { BillCreatedPayload, BillPaidPayload, DomainEvent, InvoiceCreatedPayload, InvoiceIssuedPayload, PaymentRecordedPayload, PaymentRefundedPayload, PaymentSettledPayload } from '../events/entities/event.entity';
 import { EventsService } from '../events/events.service';
-import type { ApprovalService } from '../approval/approval.service';
+import { CreateAdjustmentEntryDto, CreateManualJournalEntryDto } from './dto/manual-journal-entry.dto';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
 import { LedgerRepository } from './ledger.repository';
+import { CreateReversalEntryDto } from './dto/create-reversal-entry.dto';
 
 const SUPPORTED_EVENT_NAMES = new Set([
   'billing.invoice.created.v1',
@@ -18,7 +20,10 @@ const SUPPORTED_EVENT_NAMES = new Set([
   'billing.payment.refunded.v1',
   'billing.bill.created.v1',
   'billing.bill.approved.v1',
-  'billing.bill.paid.v1'
+  'billing.bill.paid.v1',
+  'accounting.manual.journal.posted.v1',
+  'accounting.adjustment.journal.posted.v1',
+  'accounting.journal.reversed.v1'
 ]);
 
 const SYSTEM_ACCOUNT_INDEX = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((account) => [account.code, account]));
@@ -72,6 +77,61 @@ export interface PostingLineInput {
   currency_code: string;
 }
 
+
+export interface LedgerReadFilters {
+  date_from?: string;
+  date_to?: string;
+  account_code?: string;
+  reference?: string;
+}
+
+export interface AccountActivityLine {
+  journal_entry_id: string;
+  line_number: number;
+  entry_date: string;
+  created_at: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  event_name: string;
+  account_code: string;
+  account_name: string;
+  direction: JournalLineDirection;
+  amount_minor: number;
+  debit_minor: number;
+  credit_minor: number;
+  signed_amount_minor: number;
+  running_balance_minor: number;
+  currency_code: string;
+  reference: string;
+}
+
+export interface TrialBalanceAccountRow {
+  account_code: string;
+  account_name: string;
+  debit_total_minor: number;
+  credit_total_minor: number;
+  net_minor: number;
+  currency_code: string;
+  line_count: number;
+}
+
+export interface JournalDetailRow {
+  journal_entry_id: string;
+  entry_date: string;
+  created_at: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  event_name: string;
+  description: string | null;
+  reference: string;
+  currency_code: string;
+  lines: JournalLineEntity[];
+  debit_total_minor: number;
+  credit_total_minor: number;
+}
+
 export interface PostingTransactionInput {
   tenant_id: string;
   source_type: string;
@@ -82,6 +142,7 @@ export interface PostingTransactionInput {
   entry_date: string;
   currency_code: string;
   description?: string | null;
+  metadata?: Record<string, unknown> | null;
   entries: PostingLineInput[];
 }
 
@@ -91,12 +152,99 @@ export class LedgerService {
     private readonly ledgerRepository: LedgerRepository,
     private readonly eventsService: EventsService,
     private readonly transactionManager: FinancialTransactionManager,
-    @Optional() private readonly approvalService?: ApprovalService
+    private readonly accountingPeriodRepository: AccountingPeriodRepository
   ) {
     this.validateSystemChartOfAccounts();
   }
 
+  closePeriod(tenantId: string, period: string, actor: { actor_id: string; role: UserRole }): AccountingPeriodEntity {
+    this.assertPrivilegedRole(actor.role, 'Only admins can close accounting periods');
+    const { period_start, period_end } = this.normalizePeriod(period);
+    const existing = this.accountingPeriodRepository.findByPeriod(tenantId, period_start);
+    const now = new Date().toISOString();
+
+    if (existing?.status === 'closed') {
+      return existing;
+    }
+
+    const closed: AccountingPeriodEntity = {
+      id: this.createDeterministicId('accounting-period', tenantId, period_start),
+      tenant_id: tenantId,
+      period_start,
+      period_end,
+      status: 'closed',
+      lock_version: (existing?.lock_version ?? 0) + 1,
+      closed_at: now,
+      closed_by: actor.actor_id,
+      reopened_at: null,
+      reopened_by: null,
+      reopen_reason: null
+    };
+    const saved = this.accountingPeriodRepository.save(closed);
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'accounting_period',
+      entity_id: saved.id,
+      action: 'closed',
+      aggregate_version: saved.lock_version,
+      actor_type: 'user',
+      actor_id: actor.actor_id,
+      payload: {
+        period_start: saved.period_start,
+        period_end: saved.period_end,
+        status: saved.status
+      }
+    });
+    return saved;
+  }
+
+  reopenPeriod(tenantId: string, period: string, reopenReason: string, actor: { actor_id: string; role: UserRole }): AccountingPeriodEntity {
+    this.assertPrivilegedRole(actor.role, 'Only admins can reopen accounting periods');
+    const reason = reopenReason?.trim();
+    if (!reason) {
+      throw new BadRequestException('reopen_reason is required');
+    }
+
+    const { period_start, period_end } = this.normalizePeriod(period);
+    const existing = this.accountingPeriodRepository.findByPeriod(tenantId, period_start);
+    if (!existing || existing.status !== 'closed') {
+      throw new ConflictException('Only closed periods can be reopened');
+    }
+
+    const reopened: AccountingPeriodEntity = {
+      ...existing,
+      period_end,
+      status: 'reopened',
+      lock_version: existing.lock_version + 1,
+      reopened_at: new Date().toISOString(),
+      reopened_by: actor.actor_id,
+      reopen_reason: reason
+    };
+    const saved = this.accountingPeriodRepository.save(reopened);
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'accounting_period',
+      entity_id: saved.id,
+      action: 'reopened',
+      aggregate_version: saved.lock_version,
+      actor_type: 'user',
+      actor_id: actor.actor_id,
+      payload: {
+        period_start: saved.period_start,
+        period_end: saved.period_end,
+        reopen_reason: saved.reopen_reason,
+        status: saved.status
+      }
+    });
+    return saved;
+  }
+
   post(transaction: PostingTransactionInput): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    try {
+      this.assertPostingAllowedPreflight(transaction);
+    } catch (error) {
+      return Promise.reject(error);
+    }
     return this.transactionManager.wrapper(() => {
       const normalized = this.validateAndNormalize(transaction);
       const existing = this.ledgerRepository.findBySourceEvent(
@@ -133,6 +281,7 @@ export class LedgerService {
         entry_date: normalized.entry_date,
         currency_code: normalized.currency_code,
         description: normalized.description,
+        metadata: normalized.metadata,
         created_at: normalized.created_at
       };
 
@@ -249,7 +398,161 @@ export class LedgerService {
     return this.ledgerRepository.findById(tenantId, journalEntryId);
   }
 
-  private validateAndNormalize(transaction: PostingTransactionInput): PostingTransactionInput & { created_at: string; description: string | null } {
+  createManualJournalEntry(
+    tenantId: string,
+    actorRole: UserRole,
+    payload: CreateManualJournalEntryDto,
+    requestIdempotencyKey?: string
+  ): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    this.assertManualPostingRole(actorRole);
+    const sourceId = payload.source_id?.trim();
+    if (!sourceId) {
+      throw new BadRequestException('source_id is required');
+    }
+
+    const sourceEventId = this.createDeterministicId('manual-journal', tenantId, sourceId, payload.entry_date, payload.currency_code, JSON.stringify(payload.lines));
+    const requestKey = requestIdempotencyKey?.trim();
+    if (requestKey) {
+      const existing = this.ledgerRepository.findByRequestIdempotency(tenantId, requestKey);
+      if (existing) {
+        return Promise.resolve(existing);
+      }
+    }
+
+    return this.post({
+      tenant_id: tenantId,
+      source_type: 'manual_journal_entry',
+      source_id: sourceId,
+      source_event_id: sourceEventId,
+      event_name: 'accounting.manual.journal.posted.v1',
+      rule_version: 'manual.v1',
+      entry_date: payload.entry_date,
+      currency_code: payload.currency_code,
+      description: payload.description ?? 'Manual journal entry',
+      entries: payload.lines.map((line) => ({
+        account_code: line.account_code,
+        account_name: line.account_name,
+        direction: line.direction,
+        amount_minor: line.amount_minor,
+        currency_code: payload.currency_code
+      }))
+    }).then((created) => {
+      if (requestKey) {
+        this.ledgerRepository.bindRequestIdempotency(tenantId, requestKey, created.id);
+      }
+      return created;
+    });
+  }
+
+  createAdjustmentEntry(
+    tenantId: string,
+    actorRole: UserRole,
+    payload: CreateAdjustmentEntryDto,
+    requestIdempotencyKey?: string
+  ): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    this.assertManualPostingRole(actorRole);
+    const sourceId = payload.source_id?.trim();
+    if (!sourceId) {
+      throw new BadRequestException('source_id is required');
+    }
+
+    const adjustmentReference = payload.adjusts_journal_entry_id?.trim() || null;
+    if (adjustmentReference) {
+      const referencedEntry = this.ledgerRepository.findById(tenantId, adjustmentReference);
+      if (!referencedEntry) {
+        throw new BadRequestException(`Referenced journal_entry ${adjustmentReference} was not found`);
+      }
+    }
+
+    const sourceEventId = this.createDeterministicId('adjustment-journal', tenantId, sourceId, payload.entry_date, payload.currency_code, JSON.stringify(payload.lines), adjustmentReference ?? 'none');
+
+    return this.post({
+      tenant_id: tenantId,
+      source_type: 'adjustment_journal_entry',
+      source_id: sourceId,
+      source_event_id: sourceEventId,
+      event_name: 'accounting.adjustment.journal.posted.v1',
+      rule_version: 'manual-adjustment.v1',
+      entry_date: payload.entry_date,
+      currency_code: payload.currency_code,
+      description: payload.description ?? `Adjustment entry${adjustmentReference ? ` for ${adjustmentReference}` : ''}`,
+      metadata: adjustmentReference ? { adjustment_of_journal_entry_id: adjustmentReference } : null,
+      entries: payload.lines.map((line) => ({
+        account_code: line.account_code,
+        account_name: line.account_name,
+        direction: line.direction,
+        amount_minor: line.amount_minor,
+        currency_code: payload.currency_code
+      }))
+    }).then((created) => {
+      const requestKey = requestIdempotencyKey?.trim();
+      if (requestKey) {
+        this.ledgerRepository.bindRequestIdempotency(tenantId, requestKey, created.id);
+      }
+
+      return created;
+    });
+  }
+
+  createReversalEntry(
+    tenantId: string,
+    actorRole: UserRole,
+    originalJournalEntryId: string,
+    payload: CreateReversalEntryDto,
+    requestIdempotencyKey?: string
+  ): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    this.assertManualPostingRole(actorRole);
+    const original = this.ledgerRepository.findById(tenantId, originalJournalEntryId);
+    if (!original) {
+      throw new BadRequestException(`journal_entry ${originalJournalEntryId} was not found`);
+    }
+
+    const normalizedSourceId = payload.source_id?.trim();
+    if (!normalizedSourceId) {
+      throw new BadRequestException('source_id is required');
+    }
+
+    const sourceEventId = this.createDeterministicId(
+      'reversal-journal',
+      tenantId,
+      original.id,
+      normalizedSourceId,
+      payload.reversal_date,
+      original.source_event_id,
+      original.rule_version
+    );
+
+    return this.post({
+      tenant_id: tenantId,
+      source_type: 'reversal_journal_entry',
+      source_id: normalizedSourceId,
+      source_event_id: sourceEventId,
+      event_name: 'accounting.journal.reversed.v1',
+      rule_version: 'manual-reversal.v1',
+      entry_date: payload.reversal_date,
+      currency_code: original.currency_code,
+      description: payload.reason?.trim() || `Reversal of ${original.id}`,
+      metadata: {
+        reversal_of_journal_entry_id: original.id,
+        reversal_of_source_event_id: original.source_event_id
+      },
+      entries: original.lines.map((line) => ({
+        account_code: line.account_code,
+        account_name: line.account_name,
+        direction: line.direction === 'debit' ? 'credit' : 'debit',
+        amount_minor: line.amount_minor,
+        currency_code: line.currency_code
+      }))
+    }).then((created) => {
+      const requestKey = requestIdempotencyKey?.trim();
+      if (requestKey) {
+        this.ledgerRepository.bindRequestIdempotency(tenantId, requestKey, created.id);
+      }
+      return created;
+    });
+  }
+
+  private validateAndNormalize(transaction: PostingTransactionInput): PostingTransactionInput & { created_at: string; description: string | null; metadata: Record<string, unknown> | null } {
     if (!transaction.tenant_id?.trim()) {
       throw new BadRequestException('tenant_id is required');
     }
@@ -335,6 +638,7 @@ export class LedgerService {
       entry_date: transaction.entry_date,
       currency_code: currencyCode,
       description: transaction.description?.trim() || null,
+      metadata: transaction.metadata ?? null,
       entries,
       created_at: new Date().toISOString()
     };
@@ -356,10 +660,7 @@ export class LedgerService {
           entry_date: event.occurred_at.slice(0, 10),
           currency_code: payload.currency_code,
           description: `Invoice created ${payload.invoice_id}`,
-          entries: [
-            this.createPostingLine('1100', 'Accounts Receivable', 'debit', payload.total_minor, payload.currency_code),
-            this.createPostingLine('4000', 'Revenue', 'credit', payload.total_minor, payload.currency_code)
-          ]
+          entries: this.buildInvoicePostingLines(payload.total_minor, payload.tax_minor ?? 0, payload.currency_code)
         };
       }
       case 'billing.invoice.issued.v1': {
@@ -374,10 +675,7 @@ export class LedgerService {
           entry_date: payload.issue_date,
           currency_code: payload.currency_code,
           description: `Invoice issued ${payload.invoice_id}`,
-          entries: [
-            this.createPostingLine('1100', 'Accounts Receivable', 'debit', payload.total_minor, payload.currency_code),
-            this.createPostingLine('4000', 'Revenue', 'credit', payload.total_minor, payload.currency_code)
-          ]
+          entries: this.buildInvoicePostingLines(payload.total_minor, payload.tax_minor ?? 0, payload.currency_code)
         };
       }
       case 'billing.payment.settled.v1': {
@@ -468,15 +766,43 @@ export class LedgerService {
           entry_date: payload.created_at.slice(0, 10),
           currency_code: payload.currency_code,
           description: `Bill created ${payload.bill_id} (${payload.expense_classification})`,
-          entries: [
-            this.createPostingLine('5000', 'Expense', 'debit', payload.total_minor, payload.currency_code),
-            this.createPostingLine('2000', 'Accounts Payable', 'credit', payload.total_minor, payload.currency_code)
-          ]
+          entries: this.buildBillPostingLines(payload.total_minor, payload.tax_minor ?? 0, payload.currency_code)
         };
       }
       default:
         throw new BadRequestException(`Unsupported event_name: ${eventType}`);
     }
+  }
+
+
+  private buildInvoicePostingLines(totalMinor: number, taxMinor: number, currencyCode: string): PostingLineInput[] {
+    const safeTaxMinor = Math.max(0, Math.min(totalMinor, taxMinor));
+    const revenueMinor = Math.max(0, totalMinor - safeTaxMinor);
+    const lines: PostingLineInput[] = [
+      this.createPostingLine('1100', 'Accounts Receivable', 'debit', totalMinor, currencyCode),
+      this.createPostingLine('4000', 'Revenue', 'credit', revenueMinor, currencyCode)
+    ];
+
+    if (safeTaxMinor > 0) {
+      lines.push(this.createPostingLine('2100', 'Sales Tax Payable', 'credit', safeTaxMinor, currencyCode));
+    }
+
+    return lines;
+  }
+
+  private buildBillPostingLines(totalMinor: number, taxMinor: number, currencyCode: string): PostingLineInput[] {
+    const safeTaxMinor = Math.max(0, Math.min(totalMinor, taxMinor));
+    const expenseMinor = Math.max(0, totalMinor - safeTaxMinor);
+    const lines: PostingLineInput[] = [
+      this.createPostingLine('5000', 'Expense', 'debit', expenseMinor, currencyCode)
+    ];
+
+    if (safeTaxMinor > 0) {
+      lines.push(this.createPostingLine('2100', 'Sales Tax Payable', 'debit', safeTaxMinor, currencyCode));
+    }
+
+    lines.push(this.createPostingLine('2000', 'Accounts Payable', 'credit', totalMinor, currencyCode));
+    return lines;
   }
 
   private createPostingLine(accountCode: string, accountName: string, direction: JournalLineDirection, amountMinor: number, currencyCode: string): PostingLineInput {
@@ -558,6 +884,9 @@ export class LedgerService {
 
   private validateRequiredAccounts(eventName: string, entries: PostingLineInput[]): void {
     const requiredAccountCodes = EVENT_REQUIRED_ACCOUNT_CODES.get(eventName) ?? [];
+    if (requiredAccountCodes.length === 0) {
+      return;
+    }
     const entryAccountCodes = new Set(entries.map((entry) => entry.account_code));
     const covered = requiredAccountCodes.some((code) => entryAccountCodes.has(code));
 
@@ -581,6 +910,12 @@ export class LedgerService {
     seenValues.add(value);
   }
 
+  private assertManualPostingRole(actorRole: UserRole): void {
+    if (actorRole !== 'admin') {
+      throw new ForbiddenException('manual journal operations are restricted to admin role');
+    }
+  }
+
   private createDeterministicId(...parts: string[]): string {
     const digest = createHash('sha256').update(parts.join('::')).digest('hex');
     return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`;
@@ -597,7 +932,72 @@ export class LedgerService {
         key: 'events.service',
         snapshot: () => this.eventsService.createSnapshot(),
         restore: (snapshot) => this.eventsService.restoreSnapshot(snapshot as ReturnType<EventsService['createSnapshot']>)
+      },
+      {
+        key: 'ledger.accounting-period.repository',
+        snapshot: () => this.accountingPeriodRepository.createSnapshot(),
+        restore: (snapshot) => this.accountingPeriodRepository.restoreSnapshot(snapshot as ReturnType<AccountingPeriodRepository['createSnapshot']>)
       }
     ];
+  }
+
+  private assertPostingAllowedForPeriod(tenantId: string, entryDate: string, sourceEventId: string): void {
+    const period = this.accountingPeriodRepository.findByDate(tenantId, entryDate);
+    if (!period || period.status !== 'closed') {
+      return;
+    }
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'accounting_period',
+      entity_id: period.id,
+      action: 'posting_blocked_closed_period',
+      aggregate_version: period.lock_version,
+      actor_type: 'system',
+      actor_id: null,
+      causation_id: sourceEventId,
+      payload: {
+        period_start: period.period_start,
+        period_end: period.period_end,
+        attempted_entry_date: entryDate,
+        status: period.status
+      }
+    });
+    throw new ConflictException(`Accounting period ${period.period_start}..${period.period_end} is closed and locked for posting`);
+  }
+
+  private assertPostingAllowedPreflight(transaction: PostingTransactionInput): void {
+    const tenantId = transaction.tenant_id?.trim();
+    const entryDate = transaction.entry_date?.trim();
+    const sourceEventId = transaction.source_event_id?.trim() || 'unknown';
+    if (!tenantId || !entryDate || !/^\d{4}-\d{2}-\d{2}$/.test(entryDate)) {
+      return;
+    }
+    this.assertPostingAllowedForPeriod(tenantId, entryDate, sourceEventId);
+  }
+
+  private normalizePeriod(period: string): { period_start: string; period_end: string } {
+    const normalized = period?.trim();
+    if (!/^\d{4}-\d{2}$/.test(normalized)) {
+      throw new BadRequestException('period must be in YYYY-MM format');
+    }
+
+    const [year, month] = normalized.split('-').map((value) => Number.parseInt(value, 10));
+    if (month < 1 || month > 12) {
+      throw new BadRequestException('period month must be between 01 and 12');
+    }
+
+    const periodStartDate = new Date(Date.UTC(year, month - 1, 1));
+    const periodEndDate = new Date(Date.UTC(year, month, 0));
+    return {
+      period_start: periodStartDate.toISOString().slice(0, 10),
+      period_end: periodEndDate.toISOString().slice(0, 10)
+    };
+  }
+
+  private assertPrivilegedRole(role: UserRole, message: string): void {
+    if (role !== 'admin') {
+      throw new ForbiddenException(message);
+    }
   }
 }
