@@ -19,6 +19,7 @@ export class AuthMiddleware implements NestMiddleware {
     }
 
     req.auth = this.authService.validateToken(token);
+    req.tenant = { id: req.auth.tenant_id };
     next();
   }
 }

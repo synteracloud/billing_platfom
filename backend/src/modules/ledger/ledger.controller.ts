@@ -12,6 +12,7 @@ export class LedgerController {
   constructor(private readonly ledgerService: LedgerService) {}
 
   @Post('postings')
+  @RequirePermissions(PERMISSIONS.POST_JOURNAL_ENTRIES)
   @HttpCode(HttpStatus.CREATED)
   async postJournal(@Req() req: AuthenticatedRequest, @Body() body: PostJournalDto) {
     return {
