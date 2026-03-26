@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { FinancialTransactionManager, TransactionParticipant } from '../../common/transactions/financial-transaction.manager';
 import { UserRole } from '../../common/interfaces/authenticated-request.interface';
@@ -11,6 +11,7 @@ import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
 import { LedgerRepository } from './ledger.repository';
 import { CreateReversalEntryDto } from './dto/create-reversal-entry.dto';
+import { AccountingPeriodEntity, AccountingPeriodRepository } from './accounting-period.repository';
 
 const SUPPORTED_EVENT_NAMES = new Set([
   'billing.invoice.created.v1',
@@ -25,6 +26,20 @@ const SUPPORTED_EVENT_NAMES = new Set([
   'accounting.adjustment.journal.posted.v1',
   'accounting.journal.reversed.v1'
 ]);
+
+interface ApprovalGateService {
+  enforceApprovalGate(
+    tenantId: string,
+    action: string,
+    input: {
+      actor_id: string;
+      amount_minor: number;
+      approval_request_id?: string;
+      correlation_id?: string;
+      context?: Record<string, unknown>;
+    }
+  ): void;
+}
 
 const SYSTEM_ACCOUNT_INDEX = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((account) => [account.code, account]));
 const EVENT_REQUIRED_ACCOUNT_CODES = new Map(
@@ -152,7 +167,8 @@ export class LedgerService {
     private readonly ledgerRepository: LedgerRepository,
     private readonly eventsService: EventsService,
     private readonly transactionManager: FinancialTransactionManager,
-    private readonly accountingPeriodRepository: AccountingPeriodRepository
+    @Optional() private readonly accountingPeriodRepository: AccountingPeriodRepository = new AccountingPeriodRepository(),
+    @Optional() private readonly approvalService?: ApprovalGateService
   ) {
     this.validateSystemChartOfAccounts();
   }
@@ -396,6 +412,114 @@ export class LedgerService {
 
   getJournalEntry(tenantId: string, journalEntryId: string): (JournalEntryEntity & { lines: JournalLineEntity[] }) | undefined {
     return this.ledgerRepository.findById(tenantId, journalEntryId);
+  }
+
+  getJournalDetails(tenantId: string, filters: LedgerReadFilters = {}): JournalDetailRow[] {
+    return this.listFilteredEntries(tenantId, filters).map((entry) => {
+      const debitTotalMinor = entry.lines
+        .filter((line) => line.direction === 'debit')
+        .reduce((sum, line) => sum + line.amount_minor, 0);
+      const creditTotalMinor = entry.lines
+        .filter((line) => line.direction === 'credit')
+        .reduce((sum, line) => sum + line.amount_minor, 0);
+
+      return {
+        journal_entry_id: entry.id,
+        entry_date: entry.entry_date,
+        created_at: entry.created_at,
+        source_type: entry.source_type,
+        source_id: entry.source_id,
+        source_event_id: entry.source_event_id,
+        event_name: entry.event_name,
+        description: entry.description ?? null,
+        reference: entry.source_event_id,
+        currency_code: entry.currency_code,
+        lines: [...entry.lines],
+        debit_total_minor: debitTotalMinor,
+        credit_total_minor: creditTotalMinor
+      };
+    });
+  }
+
+  getAccountActivity(tenantId: string, filters: LedgerReadFilters = {}): AccountActivityLine[] {
+    const normalized = this.normalizeReadFilters(filters);
+    if (!normalized.account_code) {
+      throw new BadRequestException('account_code is required for account activity');
+    }
+    const accountCode = normalized.account_code;
+    let runningBalanceMinor = 0;
+    return this.listFilteredEntries(tenantId, normalized)
+      .flatMap((entry) =>
+        entry.lines
+          .filter((line) => line.account_code === accountCode)
+          .map((line) => {
+            const debitMinor = line.direction === 'debit' ? line.amount_minor : 0;
+            const creditMinor = line.direction === 'credit' ? line.amount_minor : 0;
+            const signedAmountMinor = debitMinor - creditMinor;
+            runningBalanceMinor += signedAmountMinor;
+            return {
+              journal_entry_id: entry.id,
+              line_number: line.line_number,
+              entry_date: entry.entry_date,
+              created_at: entry.created_at,
+              source_type: entry.source_type,
+              source_id: entry.source_id,
+              source_event_id: entry.source_event_id,
+              event_name: entry.event_name,
+              account_code: line.account_code,
+              account_name: line.account_name,
+              direction: line.direction,
+              amount_minor: line.amount_minor,
+              debit_minor: debitMinor,
+              credit_minor: creditMinor,
+              signed_amount_minor: signedAmountMinor,
+              running_balance_minor: runningBalanceMinor,
+              currency_code: line.currency_code,
+              reference: entry.source_event_id
+            } satisfies AccountActivityLine;
+          })
+      );
+  }
+
+  getTrialBalance(tenantId: string, filters: LedgerReadFilters = {}): {
+    accounts: TrialBalanceAccountRow[];
+    totals: { debit_total_minor: number; credit_total_minor: number; net_minor: number };
+  } {
+    const accountMap = new Map<string, TrialBalanceAccountRow>();
+    for (const entry of this.listFilteredEntries(tenantId, filters)) {
+      for (const line of entry.lines) {
+        const existing = accountMap.get(line.account_code) ?? {
+          account_code: line.account_code,
+          account_name: line.account_name,
+          debit_total_minor: 0,
+          credit_total_minor: 0,
+          net_minor: 0,
+          currency_code: line.currency_code,
+          line_count: 0
+        };
+        if (line.direction === 'debit') {
+          existing.debit_total_minor += line.amount_minor;
+          existing.net_minor += line.amount_minor;
+        } else {
+          existing.credit_total_minor += line.amount_minor;
+          existing.net_minor -= line.amount_minor;
+        }
+        existing.line_count += 1;
+        accountMap.set(line.account_code, existing);
+      }
+    }
+
+    const accounts = Array.from(accountMap.values()).sort((left, right) => left.account_code.localeCompare(right.account_code));
+    const totals = accounts.reduce(
+      (acc, account) => {
+        acc.debit_total_minor += account.debit_total_minor;
+        acc.credit_total_minor += account.credit_total_minor;
+        acc.net_minor += account.net_minor;
+        return acc;
+      },
+      { debit_total_minor: 0, credit_total_minor: 0, net_minor: 0 }
+    );
+    return { accounts, totals };
   }
 
   createManualJournalEntry(
@@ -999,5 +1123,49 @@ export class LedgerService {
     if (role !== 'admin') {
       throw new ForbiddenException(message);
     }
+  }
+
+  private listFilteredEntries(tenantId: string, filters: LedgerReadFilters = {}): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    const normalized = this.normalizeReadFilters(filters);
+    return this.ledgerRepository
+      .listEntries(tenantId)
+      .filter((entry) => {
+        if (normalized.date_from && entry.entry_date < normalized.date_from) {
+          return false;
+        }
+        if (normalized.date_to && entry.entry_date > normalized.date_to) {
+          return false;
+        }
+        if (normalized.account_code && !entry.lines.some((line) => line.account_code === normalized.account_code)) {
+          return false;
+        }
+        if (normalized.reference) {
+          const reference = normalized.reference;
+          const matched = entry.source_event_id === reference || entry.source_id === reference || entry.id === reference;
+          if (!matched) {
+            return false;
+          }
+        }
+        return true;
+      })
+      .sort((left, right) => left.entry_date.localeCompare(right.entry_date)
+        || left.created_at.localeCompare(right.created_at)
+        || left.id.localeCompare(right.id));
+  }
+
+  private normalizeReadFilters(filters: LedgerReadFilters): LedgerReadFilters {
+    const normalized: LedgerReadFilters = {
+      date_from: filters.date_from?.trim() || undefined,
+      date_to: filters.date_to?.trim() || undefined,
+      account_code: filters.account_code?.trim() || undefined,
+      reference: filters.reference?.trim() || undefined
+    };
+    if (normalized.date_from && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date_from)) {
+      throw new BadRequestException('date_from must be in YYYY-MM-DD format');
+    }
+    if (normalized.date_to && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date_to)) {
+      throw new BadRequestException('date_to must be in YYYY-MM-DD format');
+    }
+    return normalized;
   }
 }
