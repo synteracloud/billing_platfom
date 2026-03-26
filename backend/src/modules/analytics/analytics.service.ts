@@ -329,7 +329,7 @@ export class AnalyticsService {
 
     const scored = categorySignals
       .map((signal) => {
-        const matchedKeywords = signal.keywords.filter((keyword) => evidence.includes(keyword));
+        const matchedKeywords = signal.keywords.filter((keyword) => this.evidenceContainsKeyword(evidence, keyword));
         return {
           category: signal.category,
           count: matchedKeywords.length,
@@ -350,6 +350,16 @@ export class AnalyticsService {
     }
 
     const top = scored[0];
+    const second = scored[1];
+    if (second && second.count === top.count) {
+      return {
+        category: 'other',
+        confidence_score: 0.38,
+        rationale: ['Conflicting deterministic signals detected; defaulting to other for safety'],
+        deterministic_fallback_used: true
+      };
+    }
+
     const confidenceScore = Math.max(0.4, Math.min(0.95, 0.45 + top.count * 0.15));
     return {
       category: top.category,
@@ -385,7 +395,7 @@ export class AnalyticsService {
     }
 
     const referenceDate = invoices
-      .map((invoice) => invoice.updated_at)
+      .map((invoice) => this.resolveGroundedDate(invoice.updated_at, invoice.due_date, invoice.issue_date))
       .sort((left, right) => right.localeCompare(left))[0]
       ?.slice(0, 10) ?? '1970-01-01';
 
@@ -394,8 +404,9 @@ export class AnalyticsService {
         const history = customerHistory.get(invoice.customer_id) ?? { total_closed: 0, late_count: 0, cumulative_late_days: 0 };
         const lateRatio = history.total_closed === 0 ? 0.25 : history.late_count / history.total_closed;
         const avgLateDays = history.late_count === 0 ? 0 : history.cumulative_late_days / history.late_count;
-        const invoiceDueDate = invoice.due_date ?? invoice.issue_date;
+        const invoiceDueDate = this.resolveGroundedDate(invoice.due_date, invoice.issue_date, invoice.updated_at);
         const overdueDays = Math.max(0, this.diffInDaysSigned(referenceDate, invoiceDueDate));
+        const groundedOpenAmountMinor = this.toGroundedMinor(invoice.open_amount_minor);
 
         const score =
           0.2 +
@@ -422,13 +433,14 @@ export class AnalyticsService {
           invoice_id: invoice.invoice_id,
           customer_id: invoice.customer_id,
           due_date: invoiceDueDate,
-          open_amount_minor: invoice.open_amount_minor,
+          open_amount_minor: groundedOpenAmountMinor,
           probability_of_delay: probability,
           drivers,
           rationale: [
             `late_ratio=${lateRatio.toFixed(2)}`,
             `avg_late_days=${avgLateDays.toFixed(1)}`,
-            `overdue_days=${overdueDays}`
+            `overdue_days=${overdueDays}`,
+            'grounded_from_ar_history=true'
           ]
         };
       })
@@ -566,5 +578,46 @@ export class AnalyticsService {
 
     const dayMs = 24 * 60 * 60 * 1000;
     return Math.round((leftTime - rightTime) / dayMs);
+  }
+
+  private evidenceContainsKeyword(evidence: string, keyword: string): boolean {
+    const normalizedKeyword = keyword.trim().toLowerCase();
+    if (!normalizedKeyword) {
+      return false;
+    }
+
+    if (normalizedKeyword.includes(' ')) {
+      return evidence.includes(normalizedKeyword);
+    }
+
+    const pattern = new RegExp(`\\b${this.escapeForRegExp(normalizedKeyword)}\\b`, 'i');
+    return pattern.test(evidence);
+  }
+
+  private escapeForRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private resolveGroundedDate(...values: Array<string | null | undefined>): string {
+    for (const value of values) {
+      if (!value) {
+        continue;
+      }
+
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) {
+        return new Date(parsed).toISOString().slice(0, 10);
+      }
+    }
+
+    return '1970-01-01';
+  }
+
+  private toGroundedMinor(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+
+    return Math.max(0, Math.round(value));
   }
 }
