@@ -43,6 +43,7 @@ import { CashflowModule } from './modules/cashflow/cashflow.module';
     LedgerModule,
     IntegrationsModule,
     SubscriptionsModule,
+    StatementsModule,
     DocumentsModule,
     EventsModule,
     AuthModule,
@@ -84,8 +85,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }
