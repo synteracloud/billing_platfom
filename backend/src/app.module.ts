@@ -25,7 +25,7 @@ import { UsersModule } from './modules/users/module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module';
 import { CashflowModule } from './modules/cashflow/cashflow.module';
-import { AccountingPeriodsModule } from './modules/accounting-periods/accounting-periods.module';
+import { TaxModule } from './modules/tax/tax.module';
 
 @Module({
   imports: [
@@ -44,6 +44,7 @@ import { AccountingPeriodsModule } from './modules/accounting-periods/accounting
     LedgerModule,
     IntegrationsModule,
     SubscriptionsModule,
+    StatementsModule,
     DocumentsModule,
     EventsModule,
     AuthModule,
@@ -53,7 +54,7 @@ import { AccountingPeriodsModule } from './modules/accounting-periods/accounting
     WebhooksModule,
     ReconciliationModule,
     CashflowModule,
-    AccountingPeriodsModule
+    TaxModule
   ]
 })
 export class AppModule implements NestModule {
@@ -88,10 +89,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow/(.*)', method: RequestMethod.ALL },
-      { path: 'api/v1/accounting', method: RequestMethod.ALL },
-      { path: 'api/v1/accounting/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/reports/financial-statements/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/tenants/:id', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id/chart-of-accounts', method: RequestMethod.GET },
       { path: 'api/v1/tenants/:id', method: RequestMethod.PATCH }
@@ -106,7 +107,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/payments', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/allocate', method: RequestMethod.POST },
       { path: 'api/v1/payments/:id/void', method: RequestMethod.POST },
-      { path: 'api/v1/ledger/postings', method: RequestMethod.POST }
+      { path: 'api/v1/ledger/postings', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/manual-entries', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/adjustments', method: RequestMethod.POST },
+      { path: 'api/v1/ledger/entries/:journal_entry_id/reversal', method: RequestMethod.POST }
     );
 
 

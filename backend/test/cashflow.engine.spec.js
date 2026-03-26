@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { CashflowService } = require('../dist/modules/cashflow/cashflow.service');
 const { LedgerService } = require('../dist/modules/ledger/ledger.service');
 const { LedgerRepository } = require('../dist/modules/ledger/ledger.repository');
+const { AccountingPeriodRepository } = require('../dist/modules/ledger/accounting-period.repository');
 const { ArService } = require('../dist/modules/ar/ar.service');
 const { ArRepository } = require('../dist/modules/ar/ar.repository');
 const { ApService } = require('../dist/modules/ap/ap.service');
@@ -28,7 +29,7 @@ function createFixture() {
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService);
 
   return {
-    ledgerService: new LedgerService(ledgerRepository, eventsService, new FinancialTransactionManager()),
+    ledgerService: new LedgerService(ledgerRepository, eventsService, new FinancialTransactionManager(), new AccountingPeriodRepository()),
     arService: new ArService(arRepository, eventsService),
     apService: new ApService(apRepository, eventsService, ledgerRepository),
     cashflowService: new CashflowService(ledgerRepository, arRepository, apRepository)

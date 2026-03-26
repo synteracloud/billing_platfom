@@ -10,6 +10,7 @@ import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceLineEntity } from './entities/invoice-line.entity';
 import { canTransitionInvoiceStatus, InvoiceEntity, InvoiceStatus } from './entities/invoice.entity';
 import { InvoicesRepository } from './invoices.repository';
+import { TaxService } from '../tax/tax.service';
 
 @Injectable()
 export class InvoicesService {
@@ -17,7 +18,8 @@ export class InvoicesService {
     private readonly invoicesRepository: InvoicesRepository,
     private readonly customersService: CustomersService,
     private readonly eventsService: EventsService,
-    private readonly transactionManager: FinancialTransactionManager
+    private readonly transactionManager: FinancialTransactionManager,
+    private readonly taxService: TaxService = new TaxService()
   ) {}
 
   listInvoices(tenantId: string): Array<InvoiceEntity & { lines: InvoiceLineEntity[] }> {
@@ -81,6 +83,9 @@ export class InvoicesService {
           customer_id: invoice.customer_id,
           invoice_number: invoice.invoice_number,
           status: createdInvoice.status,
+          subtotal_minor: createdInvoice.subtotal_minor,
+          tax_minor: createdInvoice.tax_minor,
+          jurisdiction: 'GLOBAL',
           total_minor: createdInvoice.total_minor,
           currency_code: createdInvoice.currency
         }
@@ -176,6 +181,9 @@ export class InvoicesService {
           customer_id: issuedInvoice.customer_id,
           issue_date: issueDate,
           due_date: issuedInvoice.due_date,
+          subtotal_minor: issuedInvoice.subtotal_minor,
+          tax_minor: issuedInvoice.tax_minor,
+          jurisdiction: 'GLOBAL',
           total_minor: issuedInvoice.total_minor,
           currency_code: issuedInvoice.currency
         }
@@ -238,9 +246,28 @@ export class InvoicesService {
       this.ensureDraft(invoice);
       this.validateLineData(data);
 
-      const lineSubtotal = Math.round(data.quantity * data.unit_price_minor);
-      const basisPoints = data.tax_rate_basis_points ?? null;
-      const lineTax = data.line_tax_minor ?? (basisPoints ? Math.round((lineSubtotal * basisPoints) / 10000) : 0);
+      if (data.line_tax_minor !== undefined) {
+        throw new BadRequestException('line_tax_minor cannot be provided directly; tax is calculated server-side');
+      }
+
+      const taxBreakdown = this.taxService.calculateDocumentTaxes({
+        tenant_id: tenantId,
+        jurisdiction: 'GLOBAL',
+        currency_code: invoice.currency,
+        effective_at: (invoice.issue_date ?? new Date().toISOString().slice(0, 10)),
+        lines: [{
+          line_id: '1',
+          amount_minor: data.unit_price_minor,
+          quantity: data.quantity,
+          tax_rate_basis_points: data.tax_rate_basis_points ?? null,
+          tax_code: data.tax_code ?? null,
+          tax_inclusive: data.tax_inclusive ?? false
+        }]
+      }).lines[0];
+
+      const lineSubtotal = taxBreakdown.taxable_base_minor;
+      const basisPoints = taxBreakdown.rate_basis_points;
+      const lineTax = taxBreakdown.tax_minor;
 
       const currentCount = this.invoicesRepository.listLines(tenantId, invoiceId).length;
       const createdLine = this.invoicesRepository.createLine({
@@ -250,7 +277,7 @@ export class InvoicesService {
         description: data.description.trim(),
         quantity: data.quantity,
         unit_price_minor: data.unit_price_minor,
-        tax_rate_basis_points: basisPoints,
+        tax_rate_basis_points: basisPoints || null,
         line_subtotal_minor: lineSubtotal,
         line_tax_minor: lineTax,
         line_total_minor: lineSubtotal + lineTax,
