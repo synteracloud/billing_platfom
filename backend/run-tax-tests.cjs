@@ -9,6 +9,8 @@ const sourceFiles = [
   'src/modules/ledger/entities/journal-entry.entity.ts',
   'src/modules/ledger/entities/journal-line.entity.ts',
   'src/modules/ledger/ledger.repository.ts',
+  'src/modules/tax/tax.repository.ts',
+  'src/modules/tax/tax.types.ts',
   'src/modules/tax/tax.service.ts'
 ];
 

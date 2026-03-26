@@ -1,12 +1,19 @@
 import { BadRequestException } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { InvoicesRepository } from '../invoices/invoices.repository';
 import { JournalEntryEntity } from '../ledger/entities/journal-entry.entity';
+import { LedgerRepository } from '../ledger/ledger.repository';
 import { TaxRepository } from './tax.repository';
 import { TaxDocumentCalculationResult, TaxLineCalculationInput, TaxLineCalculationResult, TaxRateEntity, TaxSummaryReport } from './tax.types';
 
 const TAX_LIABILITY_ACCOUNT_CODE = '2100';
 
 export class TaxService {
-  constructor(private readonly taxRepository: TaxRepository = new TaxRepository()) {}
+  constructor(
+    private readonly invoicesRepository: InvoicesRepository = new InvoicesRepository(),
+    private readonly ledgerRepository: LedgerRepository = new LedgerRepository(),
+    private readonly taxRepository: TaxRepository = new TaxRepository()
+  ) {}
 
   upsertTaxRate(rate: Omit<TaxRateEntity, 'id' | 'created_at' | 'updated_at'> & { id?: string }): TaxRateEntity {
     if (!rate.tenant_id?.trim()) {
@@ -174,5 +181,141 @@ export class TaxService {
       }
       return true;
     }) ?? null;
+  }
+
+  getTaxPayableSummary(tenantId: string, dateFrom: string, dateTo: string): {
+    opening_tax_payable_minor: number;
+    tax_collected_minor: number;
+    tax_paid_minor: number;
+    closing_tax_payable_minor: number;
+    reproducibility: { source_hash: string; ledger_entry_count: number };
+  } {
+    this.assertDateRange(dateFrom, dateTo);
+    const allEntries = this.ledgerRepository.listEntries(tenantId);
+    const openingEntries = allEntries.filter((entry) => entry.entry_date < dateFrom);
+    const periodEntries = allEntries.filter((entry) => entry.entry_date >= dateFrom && entry.entry_date <= dateTo);
+    const opening = this.sumTaxLiability(openingEntries);
+    const taxCollected = this.sumTaxLiabilityCredits(periodEntries);
+    const taxPaid = this.sumTaxLiabilityDebits(periodEntries);
+    const closing = opening + taxCollected - taxPaid;
+
+    const reproducibilitySource = JSON.stringify({
+      tenantId,
+      dateFrom,
+      dateTo,
+      opening,
+      taxCollected,
+      taxPaid,
+      entryIds: periodEntries.map((entry) => entry.id).sort()
+    });
+
+    return {
+      opening_tax_payable_minor: opening,
+      tax_collected_minor: taxCollected,
+      tax_paid_minor: taxPaid,
+      closing_tax_payable_minor: closing,
+      reproducibility: {
+        source_hash: createHash('sha256').update(reproducibilitySource).digest('hex'),
+        ledger_entry_count: periodEntries.length
+      }
+    };
+  }
+
+  getTaxCollectedVsPaid(tenantId: string, dateFrom: string, dateTo: string): {
+    tax_collected_minor: number;
+    tax_paid_minor: number;
+    net_liability_change_minor: number;
+    liability_view: { liability_increase_minor: number; liability_decrease_minor: number; closing_liability_minor: number };
+  } {
+    const payable = this.getTaxPayableSummary(tenantId, dateFrom, dateTo);
+    return {
+      tax_collected_minor: payable.tax_collected_minor,
+      tax_paid_minor: payable.tax_paid_minor,
+      net_liability_change_minor: payable.tax_collected_minor - payable.tax_paid_minor,
+      liability_view: {
+        liability_increase_minor: payable.tax_collected_minor,
+        liability_decrease_minor: payable.tax_paid_minor,
+        closing_liability_minor: payable.closing_tax_payable_minor
+      }
+    };
+  }
+
+  getPeriodTaxReportExportModel(tenantId: string, dateFrom: string, dateTo: string): {
+    verified_data_only: true;
+    totals: { taxable_invoice_count: number };
+    quality_checks: { missing_taxable_record_ids: string[]; tax_records_match_ledger: boolean; period_slicing_valid: boolean };
+  } {
+    this.assertDateRange(dateFrom, dateTo);
+    const invoices = this.invoicesRepository
+      .listByTenant(tenantId, {})
+      .filter((invoice) => invoice.issue_date >= dateFrom && invoice.issue_date <= dateTo && invoice.tax_minor > 0);
+    const ledgerEntries = this.ledgerRepository.listEntries(tenantId);
+    const matchedInvoiceIds = new Set<string>();
+
+    for (const entry of ledgerEntries) {
+      if (entry.entry_date < dateFrom || entry.entry_date > dateTo) {
+        continue;
+      }
+      if (entry.source_type !== 'invoice') {
+        continue;
+      }
+      const taxCredit = entry.lines
+        .filter((line) => line.account_code === TAX_LIABILITY_ACCOUNT_CODE && line.direction === 'credit')
+        .reduce((sum, line) => sum + line.amount_minor, 0);
+      if (taxCredit <= 0) {
+        continue;
+      }
+      const invoice = invoices.find((candidate) => candidate.id === entry.source_id);
+      if (invoice && invoice.tax_minor === taxCredit) {
+        matchedInvoiceIds.add(invoice.id);
+      }
+    }
+
+    const missing = invoices
+      .filter((invoice) => !matchedInvoiceIds.has(invoice.id))
+      .map((invoice) => invoice.id)
+      .sort((a, b) => a.localeCompare(b));
+
+    return {
+      verified_data_only: true,
+      totals: { taxable_invoice_count: matchedInvoiceIds.size },
+      quality_checks: {
+        missing_taxable_record_ids: missing,
+        tax_records_match_ledger: missing.length === 0,
+        period_slicing_valid: true
+      }
+    };
+  }
+
+  private sumTaxLiability(entries: Array<JournalEntryEntity & { lines: JournalEntryEntity['lines'] }>): number {
+    return entries.reduce((sum, entry) => {
+      return sum + entry.lines.reduce((lineSum, line) => {
+        if (line.account_code !== TAX_LIABILITY_ACCOUNT_CODE) {
+          return lineSum;
+        }
+        return lineSum + (line.direction === 'credit' ? line.amount_minor : -line.amount_minor);
+      }, 0);
+    }, 0);
+  }
+
+  private sumTaxLiabilityCredits(entries: Array<JournalEntryEntity & { lines: JournalEntryEntity['lines'] }>): number {
+    return entries.reduce((sum, entry) => sum + entry.lines
+      .filter((line) => line.account_code === TAX_LIABILITY_ACCOUNT_CODE && line.direction === 'credit')
+      .reduce((lineSum, line) => lineSum + line.amount_minor, 0), 0);
+  }
+
+  private sumTaxLiabilityDebits(entries: Array<JournalEntryEntity & { lines: JournalEntryEntity['lines'] }>): number {
+    return entries.reduce((sum, entry) => sum + entry.lines
+      .filter((line) => line.account_code === TAX_LIABILITY_ACCOUNT_CODE && line.direction === 'debit')
+      .reduce((lineSum, line) => lineSum + line.amount_minor, 0), 0);
+  }
+
+  private assertDateRange(dateFrom: string, dateTo: string): void {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+      throw new BadRequestException('date_from and date_to must be in YYYY-MM-DD format');
+    }
+    if (dateFrom > dateTo) {
+      throw new BadRequestException('date_from must be less than or equal to date_to');
+    }
   }
 }
