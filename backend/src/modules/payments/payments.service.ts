@@ -6,6 +6,7 @@ import { EventsService } from '../events/events.service';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { InvoicesRepository } from '../invoices/invoices.repository';
 import { InvoiceEntity } from '../invoices/entities/invoice.entity';
+import { ApprovalService } from '../approval/approval.service';
 import { AllocatePaymentDto } from './dto/allocate-payment.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { PaymentAllocationEntity } from './entities/payment-allocation.entity';
@@ -24,6 +25,7 @@ export class PaymentsService {
     private readonly customersService: CustomersService,
     private readonly eventsService: EventsService,
     private readonly idempotencyService: IdempotencyService,
+    private readonly approvalService: ApprovalService,
     private readonly transactionManager: FinancialTransactionManager
   ) {}
 
@@ -36,6 +38,16 @@ export class PaymentsService {
     return this.runIdempotentPaymentOperation(tenantId, 'payments:create', key, () => this.transactionManager.wrapper(async () => {
       this.validateCreatePayload(data);
       this.customersService.getCustomer(tenantId, data.customer_id);
+      this.approvalService.enforceApprovalGate(tenantId, 'large_payment_exception', {
+        actor_id: 'system',
+        amount_minor: data.amount_received_minor,
+        approval_request_id: data.approval_request_id,
+        correlation_id: `payment:${data.customer_id}`,
+        context: {
+          customer_id: data.customer_id,
+          payment_reference: data.payment_reference ?? null
+        }
+      });
 
       const payment = this.paymentsRepository.create({
         tenant_id: tenantId,

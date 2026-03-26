@@ -16,6 +16,8 @@ const { PaymentsRepository } = require('../.tmp-test-dist/modules/payments/payme
 const { PaymentsService } = require('../.tmp-test-dist/modules/payments/payments.service');
 const { StatementsService } = require('../.tmp-test-dist/modules/statements/statements.service');
 const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
+const { ApprovalRepository } = require('../.tmp-test-dist/modules/approval/approval.repository');
+const { ApprovalService } = require('../.tmp-test-dist/modules/approval/approval.service');
 
 function createServices() {
   const customersRepository = new CustomersRepository();
@@ -27,6 +29,8 @@ function createServices() {
   const eventQueuePublisher = new EventQueuePublisher(queueDriver);
   const eventsService = new EventsService(new EventsRepository(), eventConsumerIdempotencyService, eventQueuePublisher);
   const transactionManager = new FinancialTransactionManager();
+  const approvalService = new ApprovalService(new ApprovalRepository());
+  approvalService.configureThreshold('tenant-1', 'large_payment_exception', { requires_approval_over_minor: 1_000_000_000 });
   const invoicesRepository = new InvoicesRepository();
   const paymentsRepository = new PaymentsRepository();
   const invoicesService = new InvoicesService(invoicesRepository, customersService, eventsService, transactionManager);
@@ -36,6 +40,7 @@ function createServices() {
     customersService,
     eventsService,
     idempotencyService,
+    approvalService,
     transactionManager
   );
 

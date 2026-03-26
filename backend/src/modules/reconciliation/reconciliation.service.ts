@@ -6,6 +6,7 @@ import {
 } from './dto/reconciliation-suggestions.dto';
 import { randomUUID } from 'crypto';
 import type { EventsService } from '../events/events.service';
+import type { ApprovalService } from '../approval/approval.service';
 import {
   CreateReconciliationResultInput,
   ManualOverrideInput,
@@ -38,7 +39,8 @@ interface CreateManualMatchInput {
 export class ReconciliationService {
   constructor(
     private readonly reconciliationRepository: ReconciliationRepository,
-    @Optional() private readonly eventsService?: EventsService
+    @Optional() private readonly eventsService?: EventsService,
+    @Optional() private readonly approvalService?: ApprovalService
   ) {}
 
   createSuggestion(input: CreateReconciliationResultInput): ReconciliationResult {
@@ -63,6 +65,17 @@ export class ReconciliationService {
   }
 
   applyManualOverride(input: ManualOverrideInput): ReconciliationResult {
+    this.approvalService?.enforceApprovalGate(input.tenant_id, 'reconciliation_override', {
+      actor_id: input.user_id,
+      amount_minor: 0,
+      approval_request_id: input.approval_request_id,
+      correlation_id: input.correlation_id,
+      context: {
+        reconciliation_result_id: input.reconciliation_result_id,
+        selected_candidate_id: input.selected_candidate_id
+      }
+    });
+
     const result = this.reconciliationRepository.findById(input.tenant_id, input.reconciliation_result_id);
     if (!result) {
       throw new BadRequestException('reconciliation_result not found');

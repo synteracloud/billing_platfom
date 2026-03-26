@@ -321,7 +321,13 @@ export class LedgerService {
     }, this.transactionParticipants());
   }
 
-  postEvent(tenantId: string, eventId: string, requestIdempotencyKey?: string, ruleVersion: string | number = '1'): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+  postEvent(
+    tenantId: string,
+    eventId: string,
+    requestIdempotencyKey?: string,
+    ruleVersion: string | number = '1',
+    approvalRequestId?: string
+  ): Promise<JournalEntryEntity & { lines: JournalLineEntity[] }> {
     return this.transactionManager.wrapper(async () => {
       const normalizedTenantId = tenantId.trim();
       const normalizedRuleVersion = String(ruleVersion).trim();
@@ -338,6 +344,17 @@ export class LedgerService {
       if (!normalizedRuleVersion) {
         throw new BadRequestException('rule_version is required');
       }
+
+      this.approvalService?.enforceApprovalGate(normalizedTenantId, 'manual_journal_entry', {
+        actor_id: 'system',
+        amount_minor: 0,
+        approval_request_id: approvalRequestId,
+        correlation_id: eventId,
+        context: {
+          event_id: eventId,
+          rule_version: normalizedRuleVersion
+        }
+      });
 
       if (normalizedRequestKey) {
         const boundEntry = this.ledgerRepository.findByRequestIdempotency(normalizedTenantId, normalizedRequestKey);

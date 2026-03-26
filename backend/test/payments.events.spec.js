@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
+const { ApprovalRepository } = require('../.tmp-test-dist/modules/approval/approval.repository');
+const { ApprovalService } = require('../.tmp-test-dist/modules/approval/approval.service');
 const { CustomersRepository } = require('../.tmp-test-dist/modules/customers/customers.repository');
 const { CustomersService } = require('../.tmp-test-dist/modules/customers/customers.service');
 const { EventBusService } = require('../.tmp-test-dist/modules/events/event-bus.service');
@@ -25,6 +27,8 @@ function createPaymentsFixture() {
   const eventBusService = new EventBusService(eventsRepository, eventConsumerIdempotencyService);
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService);
   const transactionManager = new FinancialTransactionManager();
+  const approvalService = new ApprovalService(new ApprovalRepository());
+  approvalService.configureThreshold('tenant-1', 'large_payment_exception', { requires_approval_over_minor: 1_000_000_000 });
 
   return {
     invoicesRepository,

@@ -39,4 +39,5 @@ export interface ManualOverrideInput {
   user_id: string;
   reason: string;
   correlation_id?: string;
+  approval_request_id?: string;
 }

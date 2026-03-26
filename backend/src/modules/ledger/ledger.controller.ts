@@ -16,7 +16,7 @@ export class LedgerController {
   @HttpCode(HttpStatus.CREATED)
   async postJournal(@Req() req: AuthenticatedRequest, @Body() body: PostJournalDto) {
     return {
-      data: this.ledgerService.postEvent(req.auth!.tenant_id, body.event_id, req.idempotency?.key, body.rule_version ?? 1),
+      data: this.ledgerService.postEvent(req.auth!.tenant_id, body.event_id, req.idempotency?.key, body.rule_version ?? 1, body.approval_request_id),
       meta: { request_id: randomUUID() },
       error: null
     };
