@@ -3,6 +3,7 @@ import { TransactionsModule } from '../../common/transactions/transactions.modul
 import { EventsModule } from '../events/events.module';
 import { EventQueueModule } from '../events/queue/event-queue.module';
 import { ApprovalModule } from '../approval/approval.module';
+import { AccountingPeriodRepository } from './accounting-period.repository';
 import { LedgerInvoiceCreatedConsumer } from './ledger-invoice-created.consumer';
 import { LedgerController } from './ledger.controller';
 import { LedgerRepository } from './ledger.repository';
@@ -10,7 +11,7 @@ import { LedgerService } from './ledger.service';
 import { PaymentReceivedLedgerConsumer } from './payment-received-ledger.consumer';
 
 @Module({
-  imports: [EventsModule, EventQueueModule, TransactionsModule],
+  imports: [EventsModule, EventQueueModule, TransactionsModule, ApprovalModule],
   controllers: [LedgerController],
   providers: [
     LedgerRepository,

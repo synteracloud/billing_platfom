@@ -9,6 +9,8 @@ const { EventsRepository } = require('../.tmp-test-dist/modules/events/events.re
 const { EventConsumerIdempotencyService } = require('../.tmp-test-dist/modules/idempotency/event-consumer-idempotency.service');
 const { IdempotencyRepository } = require('../.tmp-test-dist/modules/idempotency/idempotency.repository');
 const { IdempotencyService } = require('../.tmp-test-dist/modules/idempotency/idempotency.service');
+const { ApprovalRepository } = require('../.tmp-test-dist/modules/approval/approval.repository');
+const { ApprovalService } = require('../.tmp-test-dist/modules/approval/approval.service');
 const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
 
 function createLedgerService() {
@@ -20,11 +22,14 @@ function createLedgerService() {
   const eventBusService = new EventBusService(eventsRepository, eventConsumerIdempotencyService);
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService);
   const transactionManager = new FinancialTransactionManager();
+  const approvalRepository = new ApprovalRepository();
+  const approvalService = new ApprovalService(approvalRepository, eventsService);
 
   return {
-    ledgerService: new LedgerService(ledgerRepository, eventsService, transactionManager, new AccountingPeriodRepository()),
+    ledgerService: new LedgerService(ledgerRepository, eventsService, transactionManager, new AccountingPeriodRepository(), approvalService),
     ledgerRepository,
-    eventsRepository
+    eventsRepository,
+    approvalService
   };
 }
 
@@ -344,7 +349,7 @@ test('posts bill.paid to accounts payable and cash idempotently', async () => {
 });
 
 test('closes period, blocks posting, then reopens with audit chain', async () => {
-  const { ledgerService, eventsRepository } = createLedgerService();
+  const { ledgerService, eventsRepository, approvalService } = createLedgerService();
   const tenantId = 'tenant-1';
 
   const closed = ledgerService.closePeriod(tenantId, '2025-01', { actor_id: 'user-admin-1', role: 'admin' });
@@ -367,7 +372,18 @@ test('closes period, blocks posting, then reopens with audit chain', async () =>
     ]
   }), /closed and locked/);
 
-  const reopened = ledgerService.reopenPeriod(tenantId, '2025-01', 'Controller approved adjustment', { actor_id: 'user-admin-2', role: 'admin' });
+  const reopenApproval = approvalService.requestApproval(tenantId, 'period_reopen', {
+    actor_id: 'requester-1',
+    amount_minor: 0
+  });
+  approvalService.approve(tenantId, reopenApproval.id, 'approver-1', 'approved');
+  const reopened = ledgerService.reopenPeriod(
+    tenantId,
+    '2025-01',
+    'Controller approved adjustment',
+    { actor_id: 'user-admin-2', role: 'admin' },
+    reopenApproval.id
+  );
   assert.equal(reopened.status, 'reopened');
   assert.equal(reopened.reopen_reason, 'Controller approved adjustment');
 
