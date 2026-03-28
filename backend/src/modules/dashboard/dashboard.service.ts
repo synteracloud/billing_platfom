@@ -248,6 +248,70 @@ export interface RunwayAnalyticsResult extends RunwayAnalyticsInput {
   runway_days: number | null;
 }
 
+export interface TrendPoint {
+  date: string;
+  amount_minor: number;
+}
+
+export interface NetCashflowTrendPoint {
+  date: string;
+  net_cashflow_minor: number;
+}
+
+const CASH_ACCOUNT_CODES = new Set(['1000', '1010']);
+
+export function buildCashflowTrends(
+  ledgerEntries: Array<{
+    entry_date: string;
+    lines: Array<{ account_code: string; direction: 'debit' | 'credit'; amount_minor: number }>;
+  }>
+): {
+  revenue_trend: TrendPoint[];
+  expense_trend: TrendPoint[];
+  net_cashflow_trend: NetCashflowTrendPoint[];
+} {
+  const dailyMovement = new Map<string, { inflow_minor: number; outflow_minor: number }>();
+
+  for (const entry of ledgerEntries) {
+    const netCashMovement = entry.lines.reduce((sum, line) => {
+      if (!CASH_ACCOUNT_CODES.has(line.account_code)) {
+        return sum;
+      }
+
+      return sum + (line.direction === 'debit' ? line.amount_minor : -line.amount_minor);
+    }, 0);
+
+    if (netCashMovement === 0) {
+      continue;
+    }
+
+    const current = dailyMovement.get(entry.entry_date) ?? { inflow_minor: 0, outflow_minor: 0 };
+    if (netCashMovement > 0) {
+      current.inflow_minor += netCashMovement;
+    } else {
+      current.outflow_minor += Math.abs(netCashMovement);
+    }
+    dailyMovement.set(entry.entry_date, current);
+  }
+
+  const byDay = Array.from(dailyMovement.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, movement]) => ({
+      date,
+      inflow_minor: movement.inflow_minor,
+      outflow_minor: movement.outflow_minor,
+    }));
+
+  return {
+    revenue_trend: byDay.map((point) => ({ date: point.date, amount_minor: point.inflow_minor })),
+    expense_trend: byDay.map((point) => ({ date: point.date, amount_minor: point.outflow_minor })),
+    net_cashflow_trend: byDay.map((point) => ({
+      date: point.date,
+      net_cashflow_minor: point.inflow_minor - point.outflow_minor,
+    })),
+  };
+}
+
 export function computeCurrentCashMinor(ledgerEntries: Array<{ lines: Array<{ account_code: string; direction: 'debit' | 'credit'; amount_minor: number }> }>): number {
   return ledgerEntries.reduce((entrySum, entry) => {
     return entrySum + entry.lines.reduce((lineSum, line) => {
@@ -312,7 +376,9 @@ export class DashboardService {
       };
       aging: AgingBuckets;
       active_subscriptions: number;
-      revenue_trend: Array<Record<string, unknown>>;
+      revenue_trend: TrendPoint[];
+      expense_trend: TrendPoint[];
+      net_cashflow_trend: NetCashflowTrendPoint[];
       recent_invoices: Array<Record<string, unknown>>;
       recent_payments: Array<Record<string, unknown>>;
     };
@@ -332,9 +398,11 @@ export class DashboardService {
     const activeSubscriptions = subscriptions.filter((subscription) => subscription.status === 'active').length;
     const aging = buildInvoiceAgingBuckets(invoices, today);
 
-    const currentCashMinor = computeCurrentCashMinor(this.ledgerRepository.listEntries(tenantId));
+    const ledgerEntries = this.ledgerRepository.listEntries(tenantId);
+    const currentCashMinor = computeCurrentCashMinor(ledgerEntries);
     const inflowsMinor = payments.reduce((sum, payment) => sum + Math.max(0, payment.amount_received_minor), 0);
-    const outflowsMinor = this.computeOutflowsMinor(tenantId);
+    const outflowsMinor = this.computeOutflowsMinor(ledgerEntries);
+    const trends = buildCashflowTrends(ledgerEntries);
     const runway = computeRunwayAnalytics({
       current_cash_minor: currentCashMinor,
       inflows_minor: inflowsMinor,
@@ -355,7 +423,9 @@ export class DashboardService {
         },
         aging,
         active_subscriptions: activeSubscriptions,
-        revenue_trend: [],
+        revenue_trend: trends.revenue_trend,
+        expense_trend: trends.expense_trend,
+        net_cashflow_trend: trends.net_cashflow_trend,
         recent_invoices: invoices.slice(0, 5).map((invoice) => ({
           invoiceNumber: invoice.invoice_number,
           customer: invoice.customer_id,
@@ -374,8 +444,8 @@ export class DashboardService {
     };
   }
 
-  private computeOutflowsMinor(tenantId: string): number {
-    const billPaymentOutflows = this.ledgerRepository.listEntries(tenantId).reduce((sum, entry) => {
+  private computeOutflowsMinor(entries: Array<{ source_type: string; lines: Array<{ account_code: string; direction: 'debit' | 'credit'; amount_minor: number }> }>): number {
+    const billPaymentOutflows = entries.reduce((sum, entry) => {
       if (entry.source_type !== 'bill') {
         return sum;
       }
