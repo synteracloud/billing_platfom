@@ -578,3 +578,66 @@ test('ledger read model handles large date range volumes and remains determinist
   assert.equal(first.totals.debit_total_minor, first.totals.credit_total_minor);
   assert.equal(first.accounts.find((row) => row.account_code === '1100')?.line_count, 180);
 });
+
+test('ledger cursor pagination is deterministic and uses account index plan', async () => {
+  const { ledgerService } = createLedgerService();
+  const tenantId = 'tenant-cursor-1';
+
+  for (let day = 1; day <= 64; day += 1) {
+    await ledgerService.post({
+      tenant_id: tenantId,
+      source_type: 'invoice',
+      source_id: `invoice-cursor-${day}`,
+      source_event_id: `evt-cursor-${day}`,
+      event_name: 'billing.invoice.issued.v1',
+      rule_version: '1',
+      entry_date: `2026-04-${String((day % 28) + 1).padStart(2, '0')}`,
+      currency_code: 'USD',
+      entries: [
+        { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 100 + day, currency_code: 'USD' },
+        { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 100 + day, currency_code: 'USD' }
+      ]
+    });
+  }
+
+  const firstPage = ledgerService.getJournalDetailsPage(tenantId, { account_code: '1100' }, { limit: 25 });
+  assert.equal(firstPage.data.length, 25);
+  assert.equal(firstPage.meta.execution_plan.index, 'tenant_account');
+  assert.equal(firstPage.meta.execution_plan.scan_count, 26, 'scan should stop once page is filled');
+  assert.equal(firstPage.meta.has_more, true);
+  assert.ok(firstPage.meta.next_cursor);
+
+  const secondPage = ledgerService.getJournalDetailsPage(tenantId, { account_code: '1100' }, { limit: 25, cursor: firstPage.meta.next_cursor });
+  assert.equal(secondPage.data.length, 25);
+  assert.equal(secondPage.meta.execution_plan.index, 'tenant_account');
+  assert.equal(secondPage.data[0].journal_entry_id === firstPage.data[24].journal_entry_id, false, 'cursor should advance');
+});
+
+test('ledger read execution plan avoids full-tenant scans for reference lookups', async () => {
+  const { ledgerService } = createLedgerService();
+  const tenantId = 'tenant-plan-1';
+
+  for (let i = 1; i <= 300; i += 1) {
+    await ledgerService.post({
+      tenant_id: tenantId,
+      source_type: 'invoice',
+      source_id: `invoice-plan-${i}`,
+      source_event_id: `evt-plan-${i}`,
+      event_name: 'billing.invoice.issued.v1',
+      rule_version: '1',
+      entry_date: `2026-05-${String((i % 28) + 1).padStart(2, '0')}`,
+      currency_code: 'USD',
+      entries: [
+        { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 10 + i, currency_code: 'USD' },
+        { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 10 + i, currency_code: 'USD' }
+      ]
+    });
+  }
+
+  const page = ledgerService.getJournalDetailsPage(tenantId, { reference: 'evt-plan-157' }, { limit: 10 });
+  assert.equal(page.data.length, 1);
+  assert.equal(page.meta.execution_plan.index, 'tenant_reference');
+  assert.equal(page.meta.execution_plan.candidate_count, 1);
+  assert.equal(page.meta.execution_plan.scan_count, 1);
+  assert.equal(page.data[0].source_event_id, 'evt-plan-157');
+});

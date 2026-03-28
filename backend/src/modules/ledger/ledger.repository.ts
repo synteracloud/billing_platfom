@@ -2,6 +2,31 @@ import { ConflictException, Injectable } from '@nestjs/common';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineEntity } from './entities/journal-line.entity';
 
+export interface LedgerReadFilters {
+  date_from?: string;
+  date_to?: string;
+  account_code?: string;
+  reference?: string;
+}
+
+export interface LedgerReadPagination {
+  cursor?: string;
+  limit?: number;
+}
+
+export interface LedgerReadPlan {
+  index: 'tenant_date' | 'tenant_account' | 'tenant_reference';
+  candidate_count: number;
+  scan_count: number;
+}
+
+export interface LedgerReadPage<TEntry> {
+  data: TEntry[];
+  next_cursor: string | null;
+  has_more: boolean;
+  plan: LedgerReadPlan;
+}
+
 @Injectable()
 export class LedgerRepository {
   private readonly journalEntries = new Map<string, JournalEntryEntity>();
@@ -10,7 +35,9 @@ export class LedgerRepository {
   private readonly requestIdempotencyIndex = new Map<string, string>();
   private readonly journalEntryLineIds = new Map<string, string[]>();
   private readonly tenantEntryIds = new Map<string, string[]>();
+  private readonly tenantDateIndex = new Map<string, string[]>();
   private readonly tenantAccountEntryIds = new Map<string, string[]>();
+  private readonly tenantReferenceIndex = new Map<string, string[]>();
 
   findBySourceEvent(tenantId: string, sourceEventId: string, ruleVersion: string): (JournalEntryEntity & { lines: JournalLineEntity[] }) | undefined {
     const existingId = this.idempotencyIndex.get(this.toIdempotencyKey(tenantId, sourceEventId, ruleVersion));
@@ -42,10 +69,7 @@ export class LedgerRepository {
       return undefined;
     }
 
-    return this.freeze({
-      ...entry,
-      lines: this.freeze(this.listLines(tenantId, journalEntryId))
-    });
+    return this.materializeEntry(entry);
   }
 
   create(entry: JournalEntryEntity, lines: JournalLineEntity[]): JournalEntryEntity & { lines: JournalLineEntity[] } {
@@ -70,12 +94,20 @@ export class LedgerRepository {
     tenantEntries.push(entry.id);
     this.tenantEntryIds.set(entry.tenant_id, tenantEntries);
 
+    const tenantDateEntryIds = this.tenantDateIndex.get(entry.tenant_id) ?? [];
+    this.insertSortedEntryId(tenantDateEntryIds, entry.id);
+    this.tenantDateIndex.set(entry.tenant_id, tenantDateEntryIds);
+
     for (const accountCode of touchedAccountCodes) {
       const accountKey = this.toTenantAccountKey(entry.tenant_id, accountCode);
       const entryIds = this.tenantAccountEntryIds.get(accountKey) ?? [];
-      entryIds.push(entry.id);
+      this.insertSortedEntryId(entryIds, entry.id);
       this.tenantAccountEntryIds.set(accountKey, entryIds);
     }
+
+    this.pushReferenceIndex(entry.tenant_id, entry.id, entry.id);
+    this.pushReferenceIndex(entry.tenant_id, entry.source_event_id, entry.id);
+    this.pushReferenceIndex(entry.tenant_id, entry.source_id, entry.id);
 
     return this.findById(entry.tenant_id, entry.id)!;
   }
@@ -91,19 +123,73 @@ export class LedgerRepository {
   }
 
   listEntries(tenantId: string): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
-    const entryIds = this.tenantEntryIds.get(tenantId) ?? [];
+    const entryIds = this.tenantDateIndex.get(tenantId) ?? [];
     return entryIds
-      .map((entryId) => this.findById(tenantId, entryId))
-      .filter((entry): entry is JournalEntryEntity & { lines: JournalLineEntity[] } => Boolean(entry))
-      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+      .map((entryId) => this.journalEntries.get(entryId))
+      .filter((entry): entry is JournalEntryEntity => Boolean(entry && entry.tenant_id === tenantId))
+      .map((entry) => this.materializeEntry(entry));
   }
 
   listEntriesByAccount(tenantId: string, accountCode: string): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
     const entryIds = this.tenantAccountEntryIds.get(this.toTenantAccountKey(tenantId, accountCode)) ?? [];
     return entryIds
-      .map((entryId) => this.findById(tenantId, entryId))
-      .filter((entry): entry is JournalEntryEntity & { lines: JournalLineEntity[] } => Boolean(entry))
-      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+      .map((entryId) => this.journalEntries.get(entryId))
+      .filter((entry): entry is JournalEntryEntity => Boolean(entry && entry.tenant_id === tenantId))
+      .map((entry) => this.materializeEntry(entry));
+  }
+
+  readEntries(
+    tenantId: string,
+    filters: LedgerReadFilters = {},
+    pagination: LedgerReadPagination = {}
+  ): LedgerReadPage<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    const normalizedLimit = this.normalizeLimit(pagination.limit);
+    const cursor = this.decodeCursor(pagination.cursor);
+
+    const planIndex = filters.reference ? 'tenant_reference' : (filters.account_code ? 'tenant_account' : 'tenant_date');
+    const candidateIds = this.resolveCandidateEntryIds(tenantId, filters, planIndex);
+
+    const page: Array<JournalEntryEntity & { lines: JournalLineEntity[] }> = [];
+    let scanCount = 0;
+    let hasMore = false;
+
+    for (const entryId of candidateIds) {
+      const entry = this.journalEntries.get(entryId);
+      if (!entry || entry.tenant_id !== tenantId) {
+        continue;
+      }
+      if (cursor && this.compareSortKey(entry, cursor) <= 0) {
+        continue;
+      }
+
+      scanCount += 1;
+      if (!this.entryMatchesFilters(entry, filters)) {
+        continue;
+      }
+
+      if (page.length < normalizedLimit) {
+        page.push(this.materializeEntry(entry));
+        continue;
+      }
+
+      hasMore = true;
+      break;
+    }
+
+    const nextCursor = page.length > 0 && hasMore
+      ? this.encodeCursor(page[page.length - 1])
+      : null;
+
+    return {
+      data: page,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+      plan: {
+        index: planIndex,
+        candidate_count: candidateIds.length,
+        scan_count: scanCount
+      }
+    };
   }
 
   createSnapshot(): {
@@ -113,7 +199,9 @@ export class LedgerRepository {
     requestIdempotencyIndex: Map<string, string>;
     journalEntryLineIds: Map<string, string[]>;
     tenantEntryIds: Map<string, string[]>;
+    tenantDateIndex: Map<string, string[]>;
     tenantAccountEntryIds: Map<string, string[]>;
+    tenantReferenceIndex: Map<string, string[]>;
   } {
     return {
       journalEntries: new Map([...this.journalEntries.entries()].map(([id, entry]) => [id, this.freeze({ ...entry })])),
@@ -122,7 +210,9 @@ export class LedgerRepository {
       requestIdempotencyIndex: new Map(this.requestIdempotencyIndex.entries()),
       journalEntryLineIds: new Map([...this.journalEntryLineIds.entries()].map(([entryId, lineIds]) => [entryId, [...lineIds]])),
       tenantEntryIds: new Map([...this.tenantEntryIds.entries()].map(([tenantId, entryIds]) => [tenantId, [...entryIds]])),
-      tenantAccountEntryIds: new Map([...this.tenantAccountEntryIds.entries()].map(([compositeKey, entryIds]) => [compositeKey, [...entryIds]]))
+      tenantDateIndex: new Map([...this.tenantDateIndex.entries()].map(([tenantId, entryIds]) => [tenantId, [...entryIds]])),
+      tenantAccountEntryIds: new Map([...this.tenantAccountEntryIds.entries()].map(([compositeKey, entryIds]) => [compositeKey, [...entryIds]])),
+      tenantReferenceIndex: new Map([...this.tenantReferenceIndex.entries()].map(([compositeKey, entryIds]) => [compositeKey, [...entryIds]]))
     };
   }
 
@@ -133,7 +223,9 @@ export class LedgerRepository {
     requestIdempotencyIndex: Map<string, string>;
     journalEntryLineIds: Map<string, string[]>;
     tenantEntryIds: Map<string, string[]>;
+    tenantDateIndex: Map<string, string[]>;
     tenantAccountEntryIds: Map<string, string[]>;
+    tenantReferenceIndex: Map<string, string[]>;
   }): void {
     this.journalEntries.clear();
     this.journalLines.clear();
@@ -141,7 +233,9 @@ export class LedgerRepository {
     this.requestIdempotencyIndex.clear();
     this.journalEntryLineIds.clear();
     this.tenantEntryIds.clear();
+    this.tenantDateIndex.clear();
     this.tenantAccountEntryIds.clear();
+    this.tenantReferenceIndex.clear();
 
     for (const [id, entry] of snapshot.journalEntries.entries()) {
       this.journalEntries.set(id, this.freeze({ ...entry }));
@@ -167,9 +261,179 @@ export class LedgerRepository {
       this.tenantEntryIds.set(tenantId, [...entryIds]);
     }
 
+    for (const [tenantId, entryIds] of snapshot.tenantDateIndex.entries()) {
+      this.tenantDateIndex.set(tenantId, [...entryIds]);
+    }
+
     for (const [compositeKey, entryIds] of snapshot.tenantAccountEntryIds.entries()) {
       this.tenantAccountEntryIds.set(compositeKey, [...entryIds]);
     }
+
+    for (const [compositeKey, entryIds] of snapshot.tenantReferenceIndex.entries()) {
+      this.tenantReferenceIndex.set(compositeKey, [...entryIds]);
+    }
+  }
+
+  private materializeEntry(entry: JournalEntryEntity): JournalEntryEntity & { lines: JournalLineEntity[] } {
+    return this.freeze({
+      ...entry,
+      lines: this.freeze(this.listLines(entry.tenant_id, entry.id))
+    });
+  }
+
+  private resolveCandidateEntryIds(tenantId: string, filters: LedgerReadFilters, planIndex: LedgerReadPlan['index']): string[] {
+    if (planIndex === 'tenant_reference' && filters.reference) {
+      return [...(this.tenantReferenceIndex.get(this.toTenantReferenceKey(tenantId, filters.reference)) ?? [])];
+    }
+    if (planIndex === 'tenant_account' && filters.account_code) {
+      return [...(this.tenantAccountEntryIds.get(this.toTenantAccountKey(tenantId, filters.account_code)) ?? [])];
+    }
+    const tenantEntryIds = this.tenantDateIndex.get(tenantId) ?? [];
+    if (!filters.date_from && !filters.date_to) {
+      return [...tenantEntryIds];
+    }
+
+    const fromAnchor: JournalEntryEntity = {
+      id: '',
+      tenant_id: tenantId,
+      source_type: '',
+      source_id: '',
+      source_event_id: '',
+      event_name: '',
+      rule_version: '',
+      entry_date: filters.date_from ?? '0000-00-00',
+      currency_code: '',
+      description: null,
+      metadata: null,
+      created_at: '0000-00-00T00:00:00.000Z'
+    };
+
+    const toAnchor: JournalEntryEntity = {
+      ...fromAnchor,
+      id: '\uffff',
+      entry_date: filters.date_to ?? '9999-12-31',
+      created_at: '9999-12-31T23:59:59.999Z'
+    };
+
+    const start = this.lowerBoundByEntry(tenantEntryIds, fromAnchor);
+    const endExclusive = this.upperBoundByEntry(tenantEntryIds, toAnchor);
+    return tenantEntryIds.slice(start, endExclusive);
+  }
+
+  private entryMatchesFilters(entry: JournalEntryEntity, filters: LedgerReadFilters): boolean {
+    if (filters.date_from && entry.entry_date < filters.date_from) {
+      return false;
+    }
+    if (filters.date_to && entry.entry_date > filters.date_to) {
+      return false;
+    }
+    if (filters.reference) {
+      const referenceMatched = entry.id === filters.reference || entry.source_id === filters.reference || entry.source_event_id === filters.reference;
+      if (!referenceMatched) {
+        return false;
+      }
+    }
+    if (!filters.account_code) {
+      return true;
+    }
+
+    const lineIds = this.journalEntryLineIds.get(entry.id) ?? [];
+    for (const lineId of lineIds) {
+      const line = this.journalLines.get(lineId);
+      if (line && line.account_code === filters.account_code) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private insertSortedEntryId(target: string[], entryId: string): void {
+    if (target.includes(entryId)) {
+      return;
+    }
+    const insertionIndex = this.lowerBoundByEntryId(target, entryId);
+    target.splice(insertionIndex, 0, entryId);
+  }
+
+  private lowerBoundByEntryId(entryIds: string[], needleEntryId: string): number {
+    const needle = this.journalEntries.get(needleEntryId);
+    if (!needle) {
+      return entryIds.length;
+    }
+    return this.lowerBoundByEntry(entryIds, needle);
+  }
+
+  private lowerBoundByEntry(entryIds: string[], needle: JournalEntryEntity): number {
+    let low = 0;
+    let high = entryIds.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const candidate = this.journalEntries.get(entryIds[mid]);
+      if (!candidate || this.compareSortKey(candidate, needle) < 0) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  private upperBoundByEntry(entryIds: string[], needle: JournalEntryEntity): number {
+    let low = 0;
+    let high = entryIds.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const candidate = this.journalEntries.get(entryIds[mid]);
+      if (!candidate || this.compareSortKey(candidate, needle) <= 0) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  private compareSortKey(left: Pick<JournalEntryEntity, 'entry_date' | 'created_at' | 'id'>, right: Pick<JournalEntryEntity, 'entry_date' | 'created_at' | 'id'>): number {
+    return left.entry_date.localeCompare(right.entry_date)
+      || left.created_at.localeCompare(right.created_at)
+      || left.id.localeCompare(right.id);
+  }
+
+  private normalizeLimit(limit?: number): number {
+    if (typeof limit !== 'number' || Number.isNaN(limit)) {
+      return 100;
+    }
+    return Math.min(500, Math.max(1, Math.trunc(limit)));
+  }
+
+  private encodeCursor(entry: Pick<JournalEntryEntity, 'entry_date' | 'created_at' | 'id'>): string {
+    return Buffer.from(JSON.stringify({
+      entry_date: entry.entry_date,
+      created_at: entry.created_at,
+      id: entry.id
+    })).toString('base64url');
+  }
+
+  private decodeCursor(cursor?: string): Pick<JournalEntryEntity, 'entry_date' | 'created_at' | 'id'> | null {
+    if (!cursor) {
+      return null;
+    }
+    try {
+      const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { entry_date: string; created_at: string; id: string };
+      if (!decoded?.entry_date || !decoded?.created_at || !decoded?.id) {
+        return null;
+      }
+      return decoded;
+    } catch {
+      return null;
+    }
+  }
+
+  private pushReferenceIndex(tenantId: string, reference: string, entryId: string): void {
+    const key = this.toTenantReferenceKey(tenantId, reference);
+    const current = this.tenantReferenceIndex.get(key) ?? [];
+    this.insertSortedEntryId(current, entryId);
+    this.tenantReferenceIndex.set(key, current);
   }
 
   private toIdempotencyKey(tenantId: string, sourceEventId: string, ruleVersion: string): string {
@@ -182,6 +446,10 @@ export class LedgerRepository {
 
   private toTenantAccountKey(tenantId: string, accountCode: string): string {
     return `${tenantId}::account::${accountCode}`;
+  }
+
+  private toTenantReferenceKey(tenantId: string, reference: string): string {
+    return `${tenantId}::reference::${reference}`;
   }
 
   private freeze<T>(value: T): T {

@@ -3,4 +3,6 @@ export interface LedgerReadQueryDto {
   date_to?: string;
   account_code?: string;
   reference?: string;
+  cursor?: string;
+  limit?: number;
 }
