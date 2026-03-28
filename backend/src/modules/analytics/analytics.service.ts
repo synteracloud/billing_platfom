@@ -241,8 +241,12 @@ export class AnalyticsService {
       for (const line of entry.lines) {
         const accountType = ACCOUNT_TYPES.get(line.account_code);
 
-        if (accountType === 'revenue' || accountType === 'contra_revenue') {
+        if (accountType === 'revenue') {
           current.revenue_minor += line.direction === 'credit' ? line.amount_minor : -line.amount_minor;
+        }
+
+        if (accountType === 'contra_revenue') {
+          current.revenue_minor += line.direction === 'debit' ? -line.amount_minor : line.amount_minor;
         }
 
         if (accountType === 'expense') {

@@ -160,7 +160,7 @@ export class PollingService {
   }
 
   private resolveCanonicalEntity(candidate: string | undefined, sourceObjectType: string, connectorId: string): string {
-    const allowed = new Set(['payment', 'bank_transaction', 'invoice']);
+    const allowed = new Set(['payment', 'bank_transaction', 'invoice', 'bill', 'vendor', 'refund']);
     const normalizedCandidate = candidate?.trim().toLowerCase().replace(/\s+/g, '_') ?? '';
     if (normalizedCandidate && allowed.has(normalizedCandidate)) {
       return normalizedCandidate;
@@ -170,9 +170,14 @@ export class PollingService {
       payment: 'payment',
       charge: 'payment',
       payout: 'payment',
+      refund: 'refund',
+      credit_note: 'refund',
       bank_transaction: 'bank_transaction',
       transaction: 'bank_transaction',
-      invoice: 'invoice'
+      invoice: 'invoice',
+      bill: 'bill',
+      vendor: 'vendor',
+      supplier: 'vendor'
     };
 
     const direct = byType[sourceObjectType];
@@ -183,6 +188,12 @@ export class PollingService {
     const providerFallback = connectorId.trim().toLowerCase();
     if (providerFallback.includes('bank')) {
       return 'bank_transaction';
+    }
+
+    if (providerFallback.includes('quickbooks') || providerFallback.includes('xero') || providerFallback.includes('netsuite')) {
+      if (sourceObjectType.includes('bill') || sourceObjectType.includes('vendor') || sourceObjectType.includes('supplier')) {
+        return sourceObjectType.includes('bill') ? 'bill' : 'vendor';
+      }
     }
 
     return 'payment';
