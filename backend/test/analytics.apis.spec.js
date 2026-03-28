@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { AnalyticsService } = require('../.tmp-test-dist/modules/analytics/analytics.service');
 const { AnalyticsReadOnlyGuard } = require('../.tmp-test-dist/modules/analytics/analytics-readonly.guard');
+const { AiController } = require('../.tmp-test-dist/modules/analytics/ai.controller');
 const { LedgerRepository } = require('../.tmp-test-dist/modules/ledger/ledger.repository');
 const { ArRepository } = require('../.tmp-test-dist/modules/ar/ar.repository');
 const { ApRepository } = require('../.tmp-test-dist/modules/ap/ap.repository');
@@ -631,4 +632,68 @@ test('collections prediction grounds invalid dates and numeric values to safe de
 
   const report = analyticsService.getCollectionsPrediction(tenantId);
   assert.equal(report.predictions.length, 0, 'invalid numeric rows should be excluded from open predictions');
+});
+
+
+test('AI endpoints are reachable via controller and stay grounded to deterministic service outputs', () => {
+  const tenantId = 'tenant-ai-endpoints';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+  const aiController = new AiController(analyticsService);
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-ai-open',
+    customer_id: 'cust-ai',
+    currency_code: 'USD',
+    issue_date: '2026-05-01',
+    due_date: '2026-05-15',
+    total_minor: 2000,
+    open_amount_minor: 2000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-05-20T00:00:00.000Z'
+  });
+
+  const classify = aiController.classify({ transaction_description: 'vendor bill for office supplies' });
+  assert.equal(classify.assistive_only, true);
+  assert.equal(classify.grounded_only, true);
+  assert.equal(classify.no_hallucination, true);
+  assert.equal(classify.result.category, 'expense');
+
+  const req = { tenant: { id: tenantId } };
+  const copilot = aiController.getCopilot(req);
+  assert.equal(copilot.grounded_only, true);
+  assert.equal(copilot.no_hallucination, true);
+  assert.equal(copilot.data_source, 'approved_read_models');
+  assert.equal(copilot.assistive_only, true);
+
+  const collections = aiController.getCollectionsPrediction(req);
+  assert.equal(collections.grounded_only, true);
+  assert.equal(collections.no_hallucination, true);
+  assert.equal(collections.data_source, 'approved_read_models');
+  assert.equal(collections.assistive_only, true);
+  assert.ok(collections.predictions.every((item) => Number.isFinite(item.open_amount_minor)));
+});
+
+test('AI guard allows POST /ai/classify but rejects writes for other analytics AI endpoints', () => {
+  const guard = new AnalyticsReadOnlyGuard();
+  assert.equal(guard.canActivate(buildExecutionContext('GET')), true);
+
+  const classifyContext = {
+    switchToHttp: () => ({
+      getRequest: () => ({ method: 'POST', path: '/ai/classify' })
+    })
+  };
+  assert.equal(guard.canActivate(classifyContext), true);
+
+  assert.throws(() => {
+    const writeCopilotContext = {
+      switchToHttp: () => ({
+        getRequest: () => ({ method: 'POST', path: '/ai/copilot' })
+      })
+    };
+    guard.canActivate(writeCopilotContext);
+  });
 });

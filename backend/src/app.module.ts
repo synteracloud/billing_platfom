@@ -87,6 +87,8 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ar/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/ap', method: RequestMethod.ALL },
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
+      { path: 'ai', method: RequestMethod.ALL },
+      { path: 'ai/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
       { path: 'api/v1/reports/financial-statements', method: RequestMethod.ALL },
