@@ -66,8 +66,9 @@ export class VendorsRepository {
     const now = new Date().toISOString();
     this.vendors.set(vendorId, {
       ...existing,
+      status: 'inactive',
       updated_at: now,
-      deleted_at: now
+      deleted_at: null
     });
 
     return true;

@@ -315,7 +315,7 @@ export function buildCashflowTrends(
 export function computeCurrentCashMinor(ledgerEntries: Array<{ lines: Array<{ account_code: string; direction: 'debit' | 'credit'; amount_minor: number }> }>): number {
   return ledgerEntries.reduce((entrySum, entry) => {
     return entrySum + entry.lines.reduce((lineSum, line) => {
-      if (line.account_code !== '1000') {
+      if (!CASH_ACCOUNT_CODES.has(line.account_code)) {
         return lineSum;
       }
 
@@ -403,6 +403,12 @@ export class DashboardService {
     const inflowsMinor = payments.reduce((sum, payment) => sum + Math.max(0, payment.amount_received_minor), 0);
     const outflowsMinor = this.computeOutflowsMinor(ledgerEntries);
     const trends = buildCashflowTrends(ledgerEntries);
+    const hasTrendData = trends.net_cashflow_trend.length > 0 || trends.revenue_trend.length > 0 || trends.expense_trend.length > 0;
+    const fallbackRevenueTrend = hasTrendData ? trends.revenue_trend : this.buildRevenueTrendFromPayments(payments);
+    const fallbackExpenseTrend = hasTrendData ? trends.expense_trend : [];
+    const fallbackNetCashflowTrend = hasTrendData
+      ? trends.net_cashflow_trend
+      : fallbackRevenueTrend.map((point) => ({ date: point.date, net_cashflow_minor: point.amount_minor }));
     const runway = computeRunwayAnalytics({
       current_cash_minor: currentCashMinor,
       inflows_minor: inflowsMinor,
@@ -423,9 +429,9 @@ export class DashboardService {
         },
         aging,
         active_subscriptions: activeSubscriptions,
-        revenue_trend: trends.revenue_trend,
-        expense_trend: trends.expense_trend,
-        net_cashflow_trend: trends.net_cashflow_trend,
+        revenue_trend: fallbackRevenueTrend,
+        expense_trend: fallbackExpenseTrend,
+        net_cashflow_trend: fallbackNetCashflowTrend,
         recent_invoices: invoices.slice(0, 5).map((invoice) => ({
           invoiceNumber: invoice.invoice_number,
           customer: invoice.customer_id,
@@ -460,6 +466,23 @@ export class DashboardService {
     }, 0);
 
     return Math.max(0, billPaymentOutflows);
+  }
+
+  private buildRevenueTrendFromPayments(payments: Array<{ payment_date: string | null; amount_received_minor: number }>): TrendPoint[] {
+    const dayTotals = new Map<string, number>();
+
+    for (const payment of payments) {
+      if (!payment.payment_date || payment.amount_received_minor <= 0) {
+        continue;
+      }
+
+      const day = payment.payment_date.slice(0, 10);
+      dayTotals.set(day, (dayTotals.get(day) ?? 0) + payment.amount_received_minor);
+    }
+
+    return Array.from(dayTotals.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([date, amount_minor]) => ({ date, amount_minor }));
   }
 
 }

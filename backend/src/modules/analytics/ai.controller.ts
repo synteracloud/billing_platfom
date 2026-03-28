@@ -5,7 +5,7 @@ import { PERMISSIONS } from '../auth/permissions';
 import { AnalyticsReadOnlyGuard } from './analytics-readonly.guard';
 import { AnalyticsService, ClassificationInput } from './analytics.service';
 
-@Controller('ai')
+@Controller('api/v1/ai')
 @UseGuards(AnalyticsReadOnlyGuard)
 @RequirePermissions(PERMISSIONS.VIEW_REPORTS)
 export class AiController {
