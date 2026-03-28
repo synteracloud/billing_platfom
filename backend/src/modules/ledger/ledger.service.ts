@@ -559,10 +559,7 @@ export class LedgerService {
       },
       { debit_total_minor: 0, credit_total_minor: 0, net_minor: 0 }
     );
-    return {
-      data: { accounts, totals },
-      meta: page.meta
-    };
+    return { accounts, totals };
   }
 
   listAccounts(
@@ -1242,7 +1239,7 @@ export class LedgerService {
     const sourceEntries = normalized.account_code
       ? this.ledgerRepository.listEntriesByAccount(tenantId, normalized.account_code)
       : this.ledgerRepository.listEntries(tenantId);
-    return sourceEntries
+    const filtered = sourceEntries
       .filter((entry) => {
         if (normalized.date_from && entry.entry_date < normalized.date_from) {
           return false;
@@ -1260,8 +1257,38 @@ export class LedgerService {
             return false;
           }
         }
+        return true;
+      })
+      .sort((left, right) => {
+        if (left.entry_date !== right.entry_date) {
+          return left.entry_date.localeCompare(right.entry_date);
+        }
+        if (left.created_at !== right.created_at) {
+          return left.created_at.localeCompare(right.created_at);
+        }
+        return left.id.localeCompare(right.id);
+      });
+
+    const pageSize = typeof pagination.limit === 'number' && Number.isFinite(pagination.limit)
+      ? Math.max(1, Math.trunc(pagination.limit))
+      : filtered.length || 1;
+    const paged = filtered.slice(0, pageSize);
+    return {
+      data: paged,
+      meta: {
+        page: 1,
+        page_size: pageSize,
+        total: filtered.length,
+        total_pages: filtered.length === 0 ? 1 : Math.ceil(filtered.length / pageSize)
       }
     };
+  }
+
+  private listFilteredEntries(
+    tenantId: string,
+    filters: LedgerReadFilters = {}
+  ): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+    return this.listFilteredEntriesPage(tenantId, filters, { limit: Number.MAX_SAFE_INTEGER }).data;
   }
 
   private normalizeReadFilters(filters: LedgerReadFilters): LedgerReadFilters {

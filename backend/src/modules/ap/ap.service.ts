@@ -12,10 +12,26 @@ export type BillApprovedPayload = {
   currency_code: string;
 };
 
+export type BillCreatedPayload = {
+  bill_id: string;
+  vendor_id: string;
+  created_at: string;
+  due_date: string | null;
+  total_minor: number;
+  currency_code: string;
+};
+
 export type BillPaidPayload = {
   bill_id: string;
   paid_at: string;
   amount_paid_minor: number;
+};
+
+export type PayableUpdatedPayload = {
+  payable_position_id: string;
+  vendor_id: string;
+  open_amount_minor: number;
+  currency_code: string;
 };
 
 export interface VendorDueTrackingState {
@@ -80,6 +96,17 @@ export class ApService {
     this.applyBillApprovedFromEvent(tenantId, payload, correlationId, `bill-approved:${payload.bill_id}:${payload.approved_at}`);
   }
 
+  applyBillCreated(tenantId: string, payload: BillCreatedPayload, correlationId: string | null): void {
+    this.applyBillApproved(
+      tenantId,
+      {
+        ...payload,
+        approved_at: payload.created_at
+      },
+      correlationId
+    );
+  }
+
   applyBillApprovedFromEvent(
     tenantId: string,
     payload: BillApprovedPayload,
@@ -141,6 +168,36 @@ export class ApService {
 
     this.apRepository.upsertBill(tenantId, next);
     this.emitPayableUpdated(tenantId, next, correlationId);
+  }
+
+  applyPayableUpdated(tenantId: string, payload: PayableUpdatedPayload, correlationId: string | null): void {
+    const bill = this.apRepository.findBill(tenantId, payload.payable_position_id);
+    if (!bill || bill.vendor_id !== payload.vendor_id) {
+      return;
+    }
+    const nextOpen = Math.max(0, Math.min(bill.total_minor, payload.open_amount_minor));
+    const next: PayableBillPosition = {
+      ...bill,
+      currency_code: payload.currency_code || bill.currency_code,
+      open_amount_minor: nextOpen,
+      paid_amount_minor: Math.max(0, bill.total_minor - nextOpen),
+      status: nextOpen === 0 ? 'closed' : 'open',
+      updated_at: new Date().toISOString()
+    };
+    this.apRepository.upsertBill(tenantId, next);
+    this.emitPayableUpdated(tenantId, next, correlationId);
+  }
+
+  getVendorBalance(tenantId: string, vendorId: string): VendorPayableState {
+    return this.getVendorPayableState(tenantId, vendorId);
+  }
+
+  getBills(tenantId: string, vendorId: string): { bills: PayableBillPosition[] } {
+    return { bills: this.getVendorPayableState(tenantId, vendorId).bills };
+  }
+
+  getDueOverdue(tenantId: string, vendorId: string, asOfDate: string): VendorDueTrackingState {
+    return this.getVendorDueTrackingState(tenantId, vendorId, asOfDate);
   }
 
   getVendorPayableState(tenantId: string, vendorId: string): VendorPayableState {

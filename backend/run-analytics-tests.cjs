@@ -3,13 +3,17 @@ const path = require('path');
 const ts = require('/root/.nvm/versions/node/v22.21.1/lib/node_modules/typescript');
 
 const sourceFiles = [
+  'src/common/interfaces/authenticated-request.interface.ts',
   'src/modules/ledger/entities/journal-entry.entity.ts',
   'src/modules/ledger/entities/journal-line.entity.ts',
   'src/modules/ledger/ledger.repository.ts',
   'src/modules/ar/ar.repository.ts',
   'src/modules/ap/ap.repository.ts',
+  'src/modules/auth/permissions.decorator.ts',
+  'src/modules/auth/permissions.ts',
   'src/modules/analytics/analytics-readonly.guard.ts',
-  'src/modules/analytics/analytics.service.ts'
+  'src/modules/analytics/analytics.service.ts',
+  'src/modules/analytics/ai.controller.ts'
 ];
 
 const srcRoot = path.resolve(__dirname);

@@ -133,7 +133,10 @@ export class FinancialStatementsService {
       pnl_matches_revenue_expense_accounts: currentPeriod.netIncomeMinor === currentPeriod.revenueMinor - currentPeriod.expenseMinor,
       balance_sheet_equation_valid: currentPeriod.equationDeltaMinor === 0,
       cash_flow_matches_cash_movements:
-        currentPeriod.netCashflowMinor === currentPeriod.closingCashMinor - currentPeriod.openingCashMinor
+        currentPeriod.netCashflowMinor === currentPeriod.closingCashMinor - currentPeriod.openingCashMinor,
+      cash_flow_sections_validated: Object.values(currentPeriod.sections).every(
+        (section) => section.net_cashflow_minor === section.inflows_minor - section.outflows_minor
+      )
     };
 
     return this.freezeDeep({
@@ -161,9 +164,11 @@ export class FinancialStatementsService {
         inflows_minor: currentPeriod.inflowsMinor,
         outflows_minor: currentPeriod.outflowsMinor,
         net_cashflow_minor: currentPeriod.netCashflowMinor,
+        sections: currentPeriod.sections,
         account_balances: this.toRows(currentPeriod.periodAccountBalances, new Set(['asset'])).filter((row) =>
           CASH_ACCOUNT_CODES.has(row.account_code)
         ),
+        movements: currentPeriod.movements,
         daily: currentPeriod.daily
       },
       comparisons: {
@@ -180,9 +185,12 @@ export class FinancialStatementsService {
     periodTo: string,
     includeDaily: boolean
   ) {
+    const fiscalYearStart = `${periodFrom.slice(0, 4)}-01-01`;
     const entriesInPeriod = ledgerEntries.filter((entry) => entry.entry_date >= periodFrom && entry.entry_date <= periodTo);
-    const entriesToDate = ledgerEntries.filter((entry) => entry.entry_date <= periodTo);
-    const entriesBeforePeriod = ledgerEntries.filter((entry) => entry.entry_date < periodFrom);
+    const entriesToDate = ledgerEntries.filter((entry) => entry.entry_date >= fiscalYearStart && entry.entry_date <= periodTo);
+    const entriesBeforePeriod = ledgerEntries.filter(
+      (entry) => entry.entry_date >= fiscalYearStart && entry.entry_date < periodFrom
+    );
     const periodAccountBalances = this.computeBalances(entriesInPeriod.flatMap((entry) => entry.lines));
     const cumulativeAccountBalances = this.computeBalances(entriesToDate.flatMap((entry) => entry.lines));
     const openingAccountBalances = this.computeBalances(entriesBeforePeriod.flatMap((entry) => entry.lines));
@@ -211,7 +219,7 @@ export class FinancialStatementsService {
       no_mutation_leaks: true as const,
       no_double_counting: true as const,
       statements_reconcile_to_ledger: equationDeltaMinor === 0 && netCashflowMinor === closingCashMinor - openingCashMinor,
-      period_calculations_correct: entriesInPeriod.every((entry) => entry.entry_date >= normalizedFrom && entry.entry_date <= normalizedTo),
+      period_calculations_correct: entriesInPeriod.every((entry) => entry.entry_date >= periodFrom && entry.entry_date <= periodTo),
       pnl_matches_revenue_expense_accounts: netIncomeMinor === revenueMinor - expenseMinor,
       balance_sheet_equation_valid: equationDeltaMinor === 0,
       cash_flow_matches_cash_movements: netCashflowMinor === closingCashMinor - openingCashMinor,
@@ -219,6 +227,28 @@ export class FinancialStatementsService {
         sectionsInflowMinor === inflowsMinor &&
         sectionsOutflowMinor === outflowsMinor &&
         sectionTotals.every((section) => section.net_cashflow_minor === section.inflows_minor - section.outflows_minor)
+    };
+    return {
+      periodFrom,
+      periodTo,
+      periodAccountBalances,
+      cumulativeAccountBalances,
+      revenueMinor,
+      expenseMinor,
+      netIncomeMinor,
+      assetsMinor,
+      liabilitiesMinor,
+      equityMinor,
+      openingCashMinor,
+      closingCashMinor,
+      inflowsMinor,
+      outflowsMinor,
+      netCashflowMinor,
+      equationDeltaMinor,
+      sections,
+      movements,
+      daily: includeDaily ? daily : [],
+      periodBoundariesValid: qc.period_calculations_correct
     };
   }
 
@@ -235,17 +265,11 @@ export class FinancialStatementsService {
         net_income_minor: this.buildVariance(current.netIncomeMinor, comparison.netIncomeMinor)
       },
       cash_flow_statement: {
-        period_from: normalizedFrom,
-        period_to: normalizedTo,
-        opening_cash_minor: openingCashMinor,
-        closing_cash_minor: closingCashMinor,
-        inflows_minor: inflowsMinor,
-        outflows_minor: outflowsMinor,
-        net_cashflow_minor: netCashflowMinor,
-        sections,
-        account_balances: this.toRows(periodAccountBalances, new Set(['asset'])).filter((row) => CASH_ACCOUNT_CODES.has(row.account_code)),
-        movements,
-        daily
+        opening_cash_minor: this.buildVariance(current.openingCashMinor, comparison.openingCashMinor),
+        closing_cash_minor: this.buildVariance(current.closingCashMinor, comparison.closingCashMinor),
+        inflows_minor: this.buildVariance(current.inflowsMinor, comparison.inflowsMinor),
+        outflows_minor: this.buildVariance(current.outflowsMinor, comparison.outflowsMinor),
+        net_cashflow_minor: this.buildVariance(current.netCashflowMinor, comparison.netCashflowMinor)
       },
       balance_sheet: {
         assets_minor: this.buildVariance(current.assetsMinor, comparison.assetsMinor),
