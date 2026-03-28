@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Param, Patch, Post, Query } from '@nestjs/common';
 import { Req } from '@nestjs/common/decorators';
 import { randomUUID } from 'crypto';
 import { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface';
@@ -31,9 +31,13 @@ export class BillsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  createBill(@Req() req: AuthenticatedRequest, @Body() body: CreateBillDto): SuccessResponse<BillEntity> {
+  createBill(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: CreateBillDto,
+    @Headers('x-idempotency-key') idempotencyKey?: string
+  ): SuccessResponse<BillEntity> {
     return {
-      data: this.billsService.createBill(req.auth!.tenant_id, body),
+      data: this.billsService.createBill(req.auth!.tenant_id, body, req.auth?.user_id, idempotencyKey),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -52,10 +56,11 @@ export class BillsController {
   updateBill(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: UpdateBillDto
+    @Body() body: UpdateBillDto,
+    @Headers('x-idempotency-key') idempotencyKey?: string
   ): SuccessResponse<BillEntity> {
     return {
-      data: this.billsService.updateBill(req.auth!.tenant_id, id, body),
+      data: this.billsService.updateBill(req.auth!.tenant_id, id, body, req.auth?.user_id, idempotencyKey),
       meta: { request_id: this.getRequestId() },
       error: null
     };
@@ -63,8 +68,12 @@ export class BillsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  deleteBill(@Req() req: AuthenticatedRequest, @Param('id') id: string): void {
-    this.billsService.deleteBill(req.auth!.tenant_id, id);
+  deleteBill(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Headers('x-idempotency-key') idempotencyKey?: string
+  ): void {
+    this.billsService.deleteBill(req.auth!.tenant_id, id, req.auth?.user_id, idempotencyKey);
   }
 
   private getRequestId(): string {
