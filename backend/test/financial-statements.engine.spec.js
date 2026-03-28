@@ -65,6 +65,66 @@ test('financial statements engine is period-aware, ledger-derived, deterministic
   await fixture.ledgerService.post({
     tenant_id: tenantId,
     source_type: 'invoice',
+    source_id: 'inv-last-year',
+    source_event_id: 'evt-inv-last-year',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-03-01',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'AR', direction: 'debit', amount_minor: 800, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 800, currency_code: 'USD' }
+    ]
+  });
+
+  await fixture.ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'payment',
+    source_id: 'pay-last-year',
+    source_event_id: 'evt-pay-last-year',
+    event_name: 'billing.payment.settled.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-03-05',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 800, currency_code: 'USD' },
+      { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: 800, currency_code: 'USD' }
+    ]
+  });
+
+  await fixture.ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'bill',
+    source_id: 'bill-last-year',
+    source_event_id: 'evt-bill-last-year',
+    event_name: 'billing.bill.approved.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-03-06',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '5000', account_name: 'Expense', direction: 'debit', amount_minor: 500, currency_code: 'USD' },
+      { account_code: '2000', account_name: 'AP', direction: 'credit', amount_minor: 500, currency_code: 'USD' }
+    ]
+  });
+
+  await fixture.ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'bill_payment',
+    source_id: 'bill-pay-last-year',
+    source_event_id: 'evt-bill-pay-last-year',
+    event_name: 'billing.bill.paid.v1',
+    rule_version: '2025-01-01',
+    entry_date: '2025-03-07',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: 500, currency_code: 'USD' },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 500, currency_code: 'USD' }
+    ]
+  });
+
+  await fixture.ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
     source_id: 'inv-1',
     source_event_id: 'evt-inv-1',
     event_name: 'billing.invoice.issued.v1',
