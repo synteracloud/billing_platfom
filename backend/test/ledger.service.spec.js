@@ -273,6 +273,7 @@ test('posts bill.created to expense and accounts payable idempotently', async ()
     tenant_id: 'tenant-1',
     payload: {
       bill_id: 'bill-evt-1',
+      vendor_id: 'vendor-1',
       created_at: '2025-01-21T00:00:00.000Z',
       total_minor: 3100,
       currency_code: 'USD',

@@ -141,7 +141,7 @@ export type PaymentAllocationChange = {
 
 export type BillCreatedPayload = {
   bill_id: string;
-  vendor_id?: string;
+  vendor_id: string;
   created_at: string;
   due_date?: string | null;
   subtotal_minor?: number;
