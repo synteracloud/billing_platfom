@@ -85,7 +85,7 @@ const payloadValidators: {
   'billing.bill.created.v1': (payload) => {
     requireString(payload.bill_id, 'payload.bill_id');
     requireString(payload.created_at, 'payload.created_at');
-    requireOptionalString(payload.vendor_id, 'payload.vendor_id');
+    requireString(payload.vendor_id, 'payload.vendor_id');
     requireOptionalNullableString(payload.due_date, 'payload.due_date');
     requireNumber(payload.total_minor, 'payload.total_minor');
     requireString(payload.currency_code, 'payload.currency_code');
@@ -94,6 +94,14 @@ const payloadValidators: {
       'payload.expense_classification',
       ['operating', 'cost_of_goods_sold', 'asset'] as const
     );
+  },
+  'billing.bill.approved.v1': (payload) => {
+    requireString(payload.bill_id, 'payload.bill_id');
+    requireString(payload.vendor_id, 'payload.vendor_id');
+    requireString(payload.approved_at, 'payload.approved_at');
+    requireOptionalNullableString(payload.due_date, 'payload.due_date');
+    requireNumber(payload.total_minor, 'payload.total_minor');
+    requireString(payload.currency_code, 'payload.currency_code');
   },
   'billing.bill.paid.v1': (payload) => {
     requireString(payload.bill_id, 'payload.bill_id');
