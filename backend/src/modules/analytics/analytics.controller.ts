@@ -16,6 +16,12 @@ export class AnalyticsController {
     return this.analyticsService.getCashflow(request.tenant.id);
   }
 
+  @Get('time-series')
+  getTimeSeries(@Req() request: AuthenticatedRequest, @Query('bucket') bucket?: 'daily' | 'weekly' | 'monthly') {
+    const normalizedBucket = bucket === 'weekly' || bucket === 'monthly' ? bucket : 'daily';
+    return this.analyticsService.getTimeSeries(request.tenant.id, normalizedBucket);
+  }
+
   @Get('inflow-projection')
   getInflowProjection(@Req() request: AuthenticatedRequest) {
     return this.analyticsService.getInflowProjection(request.tenant.id);

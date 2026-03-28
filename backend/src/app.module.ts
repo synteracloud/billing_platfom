@@ -5,6 +5,7 @@ import { AuthModule } from './modules/auth/module';
 import { BankConnectorModule } from './modules/bank-connector/bank-connector.module';
 import { ArModule } from './modules/ar/ar.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { AiSafetyModule } from './modules/ai-safety/ai-safety.module';
 import { ApModule } from './modules/ap/ap.module';
 import { DatabaseModule } from './database/database.module';
 import { CustomersModule } from './modules/customers/customers.module';
@@ -26,6 +27,8 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module';
 import { CashflowModule } from './modules/cashflow/cashflow.module';
 import { TaxModule } from './modules/tax/tax.module';
+import { VendorsModule } from './modules/vendors/vendors.module';
+import { BillsModule } from './modules/bills/bills.module';
 
 @Module({
   imports: [
@@ -51,10 +54,13 @@ import { TaxModule } from './modules/tax/tax.module';
     ArModule,
     ApModule,
     AnalyticsModule,
+    AiSafetyModule,
     WebhooksModule,
     ReconciliationModule,
     CashflowModule,
-    TaxModule
+    TaxModule,
+    VendorsModule,
+    BillsModule
   ]
 })
 export class AppModule implements NestModule {
@@ -87,6 +93,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ar/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/ap', method: RequestMethod.ALL },
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/vendors', method: RequestMethod.ALL },
+      { path: 'api/v1/vendors/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/bills', method: RequestMethod.ALL },
+      { path: 'api/v1/bills/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
       { path: 'api/v1/reports/financial-statements', method: RequestMethod.ALL },

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { AnalyticsService } = require('../.tmp-test-dist/modules/analytics/analytics.service');
 const { AnalyticsReadOnlyGuard } = require('../.tmp-test-dist/modules/analytics/analytics-readonly.guard');
+const { AiController } = require('../.tmp-test-dist/modules/analytics/ai.controller');
 const { LedgerRepository } = require('../.tmp-test-dist/modules/ledger/ledger.repository');
 const { ArRepository } = require('../.tmp-test-dist/modules/ar/ar.repository');
 const { ApRepository } = require('../.tmp-test-dist/modules/ap/ap.repository');
@@ -233,6 +234,137 @@ test('projections include overdue invoices and future bills with deterministic o
     { date: '2026-02-01', amount_minor: 900 },
     { date: '2026-04-15', amount_minor: 5000 }
   ]);
+});
+
+test('time-series engine aggregates ledger-derived revenue, expense, and cashflow across daily/weekly/monthly buckets', () => {
+  const tenantId = 'tenant-analytics-timeseries';
+  const ledgerRepository = new LedgerRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, new ArRepository(), new ApRepository());
+
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-1',
+    tenant_id: tenantId,
+    entry_date: '2026-01-31',
+    lines: [
+      { account_code: '1100', account_name: 'AR', direction: 'debit', amount_minor: 1000 },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 1000 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-2',
+    tenant_id: tenantId,
+    entry_date: '2026-02-01',
+    lines: [
+      { account_code: '5000', account_name: 'Expense', direction: 'debit', amount_minor: 600 },
+      { account_code: '2000', account_name: 'AP', direction: 'credit', amount_minor: 600 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-3',
+    tenant_id: tenantId,
+    entry_date: '2026-02-01',
+    lines: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 800 },
+      { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: 800 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-4',
+    tenant_id: tenantId,
+    entry_date: '2026-02-02',
+    lines: [
+      { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: 300 },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 300 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-5',
+    tenant_id: tenantId,
+    entry_date: '2026-02-10',
+    lines: [
+      { account_code: '1100', account_name: 'AR', direction: 'debit', amount_minor: 500 },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 500 }
+    ]
+  });
+
+  const daily = analyticsService.getTimeSeries(tenantId, 'daily');
+  assert.deepEqual(daily.points, [
+    { bucket: '2026-01-31', period_from: '2026-01-31', period_to: '2026-01-31', revenue_minor: 1000, expense_minor: 0, cashflow_minor: 0 },
+    { bucket: '2026-02-01', period_from: '2026-02-01', period_to: '2026-02-01', revenue_minor: 0, expense_minor: 600, cashflow_minor: 800 },
+    { bucket: '2026-02-02', period_from: '2026-02-02', period_to: '2026-02-02', revenue_minor: 0, expense_minor: 0, cashflow_minor: -300 },
+    { bucket: '2026-02-10', period_from: '2026-02-10', period_to: '2026-02-10', revenue_minor: 500, expense_minor: 0, cashflow_minor: 0 }
+  ]);
+
+  const weekly = analyticsService.getTimeSeries(tenantId, 'weekly');
+  assert.deepEqual(weekly.points, [
+    { bucket: '2026-01-26', period_from: '2026-01-26', period_to: '2026-02-01', revenue_minor: 1000, expense_minor: 600, cashflow_minor: 800 },
+    { bucket: '2026-02-02', period_from: '2026-02-02', period_to: '2026-02-08', revenue_minor: 0, expense_minor: 0, cashflow_minor: -300 },
+    { bucket: '2026-02-09', period_from: '2026-02-09', period_to: '2026-02-15', revenue_minor: 500, expense_minor: 0, cashflow_minor: 0 }
+  ]);
+
+  const monthly = analyticsService.getTimeSeries(tenantId, 'monthly');
+  assert.deepEqual(monthly.points, [
+    { bucket: '2026-01', period_from: '2026-01-01', period_to: '2026-01-31', revenue_minor: 1000, expense_minor: 0, cashflow_minor: 0 },
+    { bucket: '2026-02', period_from: '2026-02-01', period_to: '2026-02-28', revenue_minor: 500, expense_minor: 600, cashflow_minor: 500 }
+  ]);
+
+  assert.deepEqual(daily.totals, weekly.totals);
+  assert.deepEqual(weekly.totals, monthly.totals);
+  assert.deepEqual(monthly.totals, { revenue_minor: 1500, expense_minor: 600, cashflow_minor: 500 });
+});
+
+test('time-series grouping avoids double counting and handles edge dates plus data gaps deterministically', () => {
+  const tenantId = 'tenant-analytics-timeseries-qc';
+  const ledgerRepository = new LedgerRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, new ArRepository(), new ApRepository());
+
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-1',
+    tenant_id: tenantId,
+    entry_date: '2024-12-31',
+    lines: [
+      { account_code: '1100', account_name: 'AR', direction: 'debit', amount_minor: 900 },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 900 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-2',
+    tenant_id: tenantId,
+    entry_date: '2025-01-01',
+    lines: [
+      { account_code: '5000', account_name: 'Expense', direction: 'debit', amount_minor: 400 },
+      { account_code: '2000', account_name: 'AP', direction: 'credit', amount_minor: 400 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-3',
+    tenant_id: tenantId,
+    entry_date: '2025-01-10',
+    lines: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 200 },
+      { account_code: '1010', account_name: 'Bank Clearing', direction: 'credit', amount_minor: 200 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-4',
+    tenant_id: tenantId,
+    entry_date: '2025-01-10',
+    lines: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 100 },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 100 }
+    ]
+  });
+
+  const weekly = analyticsService.getTimeSeries(tenantId, 'weekly');
+  assert.deepEqual(weekly.points, [
+    { bucket: '2024-12-30', period_from: '2024-12-30', period_to: '2025-01-05', revenue_minor: 900, expense_minor: 400, cashflow_minor: 0 },
+    { bucket: '2025-01-06', period_from: '2025-01-06', period_to: '2025-01-12', revenue_minor: 0, expense_minor: 0, cashflow_minor: 0 }
+  ]);
+
+  const daily = analyticsService.getTimeSeries(tenantId, 'daily');
+  assert.equal(daily.points.length, 3, 'days without ledger activity must not create synthetic buckets');
+  assert.deepEqual(daily.totals, weekly.totals);
+  assert.deepEqual(weekly.totals, { revenue_minor: 900, expense_minor: 400, cashflow_minor: 0 });
 });
 
 test('runway handles burn and edge cases with zero/negative horizon', () => {
@@ -631,4 +763,68 @@ test('collections prediction grounds invalid dates and numeric values to safe de
 
   const report = analyticsService.getCollectionsPrediction(tenantId);
   assert.equal(report.predictions.length, 0, 'invalid numeric rows should be excluded from open predictions');
+});
+
+
+test('AI endpoints are reachable via controller and stay grounded to deterministic service outputs', () => {
+  const tenantId = 'tenant-ai-endpoints';
+  const ledgerRepository = new LedgerRepository();
+  const arRepository = new ArRepository();
+  const apRepository = new ApRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, arRepository, apRepository);
+  const aiController = new AiController(analyticsService);
+
+  arRepository.upsertInvoice(tenantId, {
+    invoice_id: 'inv-ai-open',
+    customer_id: 'cust-ai',
+    currency_code: 'USD',
+    issue_date: '2026-05-01',
+    due_date: '2026-05-15',
+    total_minor: 2000,
+    open_amount_minor: 2000,
+    paid_amount_minor: 0,
+    status: 'open',
+    updated_at: '2026-05-20T00:00:00.000Z'
+  });
+
+  const classify = aiController.classify({ transaction_description: 'vendor bill for office supplies' });
+  assert.equal(classify.assistive_only, true);
+  assert.equal(classify.grounded_only, true);
+  assert.equal(classify.no_hallucination, true);
+  assert.equal(classify.result.category, 'expense');
+
+  const req = { tenant: { id: tenantId } };
+  const copilot = aiController.getCopilot(req);
+  assert.equal(copilot.grounded_only, true);
+  assert.equal(copilot.no_hallucination, true);
+  assert.equal(copilot.data_source, 'approved_read_models');
+  assert.equal(copilot.assistive_only, true);
+
+  const collections = aiController.getCollectionsPrediction(req);
+  assert.equal(collections.grounded_only, true);
+  assert.equal(collections.no_hallucination, true);
+  assert.equal(collections.data_source, 'approved_read_models');
+  assert.equal(collections.assistive_only, true);
+  assert.ok(collections.predictions.every((item) => Number.isFinite(item.open_amount_minor)));
+});
+
+test('AI guard allows POST /ai/classify but rejects writes for other analytics AI endpoints', () => {
+  const guard = new AnalyticsReadOnlyGuard();
+  assert.equal(guard.canActivate(buildExecutionContext('GET')), true);
+
+  const classifyContext = {
+    switchToHttp: () => ({
+      getRequest: () => ({ method: 'POST', path: '/ai/classify' })
+    })
+  };
+  assert.equal(guard.canActivate(classifyContext), true);
+
+  assert.throws(() => {
+    const writeCopilotContext = {
+      switchToHttp: () => ({
+        getRequest: () => ({ method: 'POST', path: '/ai/copilot' })
+      })
+    };
+    guard.canActivate(writeCopilotContext);
+  });
 });
