@@ -20,7 +20,11 @@ const sourceFiles = [
   'src/modules/integrations/entities/raw-integration-response.entity.ts',
   'src/modules/integrations/polling.repository.ts',
   'src/modules/integrations/polling.service.ts',
-  'src/modules/integrations/scheduler.service.ts'
+  'src/modules/integrations/scheduler.service.ts',
+  'src/modules/webhooks/entities/webhook-ingestion.entity.ts',
+  'src/modules/webhooks/webhooks.repository.ts',
+  'src/modules/webhooks/webhooks.service.ts',
+  'src/modules/integrations/testing/connector-test-harness.ts',
 ];
 
 const srcRoot = path.resolve(__dirname);
@@ -49,3 +53,4 @@ for (const relativeFile of sourceFiles) {
 
 require('node:test');
 require('./test/integrations.polling.spec.js');
+require('./test/connector-test-harness.spec.js');
