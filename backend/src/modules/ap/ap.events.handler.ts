@@ -27,7 +27,7 @@ export class ApEventsHandler implements OnApplicationBootstrap {
     this.eventProcessingRegistry.register('billing.bill.created.v1', 'ap-payable-created-projection', async (event) => {
       const payload = event.payload as QueueEnvelope['payload'] & {
         bill_id: string;
-        vendor_id?: string;
+        vendor_id: string;
         created_at: string;
         due_date?: string | null;
         total_minor: number;
@@ -38,7 +38,7 @@ export class ApEventsHandler implements OnApplicationBootstrap {
         event.tenant_id,
         {
           bill_id: payload.bill_id,
-          vendor_id: payload.vendor_id ?? 'unknown-vendor',
+          vendor_id: payload.vendor_id,
           approved_at: payload.created_at,
           due_date: payload.due_date ?? null,
           total_minor: payload.total_minor,
