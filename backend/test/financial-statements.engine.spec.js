@@ -11,6 +11,7 @@ const { EventConsumerIdempotencyService } = require('../.tmp-test-dist/modules/i
 const { IdempotencyRepository } = require('../.tmp-test-dist/modules/idempotency/idempotency.repository');
 const { IdempotencyService } = require('../.tmp-test-dist/modules/idempotency/idempotency.service');
 const { FinancialTransactionManager } = require('../.tmp-test-dist/common/transactions/financial-transaction.manager');
+const { AccountingPeriodRepository } = require('../.tmp-test-dist/modules/ledger/accounting-period.repository');
 
 function createFixture() {
   const ledgerRepository = new LedgerRepository();
@@ -22,7 +23,7 @@ function createFixture() {
   const eventsService = new EventsService(eventsRepository, eventConsumerIdempotencyService, eventBusService);
 
   return {
-    ledgerService: new LedgerService(ledgerRepository, eventsService, new FinancialTransactionManager()),
+    ledgerService: new LedgerService(ledgerRepository, eventsService, new FinancialTransactionManager(), new AccountingPeriodRepository()),
     financialStatementsService: new FinancialStatementsService(ledgerRepository)
   };
 }
@@ -121,6 +122,7 @@ test('financial statements engine is period-aware, ledger-derived, deterministic
     ]
   });
 
+
   await fixture.ledgerService.post({
     tenant_id: tenantId,
     source_type: 'refund',
@@ -156,11 +158,26 @@ test('financial statements engine is period-aware, ledger-derived, deterministic
   assert.equal(first.cash_flow_statement.outflows_minor, 900);
   assert.equal(first.cash_flow_statement.net_cashflow_minor, 100);
 
+  assert.deepEqual(first.cash_flow_statement.sections, {
+    operating: { inflows_minor: 1000, outflows_minor: 900, net_cashflow_minor: 100 },
+    investing: { inflows_minor: 0, outflows_minor: 0, net_cashflow_minor: 0 },
+    financing: { inflows_minor: 0, outflows_minor: 0, net_cashflow_minor: 0 }
+  });
+
   assert.deepEqual(first.cash_flow_statement.daily, [
     { date: '2026-03-02', inflows_minor: 1000, outflows_minor: 0, net_cashflow_minor: 1000 },
     { date: '2026-03-04', inflows_minor: 0, outflows_minor: 700, net_cashflow_minor: -700 },
     { date: '2026-03-05', inflows_minor: 0, outflows_minor: 200, net_cashflow_minor: -200 }
   ]);
+
+  assert.deepEqual(
+    first.cash_flow_statement.movements.map((movement) => ({ date: movement.date, section: movement.section, net: movement.net_cashflow_minor })),
+    [
+      { date: '2026-03-02', section: 'operating', net: 1000 },
+      { date: '2026-03-04', section: 'operating', net: -700 },
+      { date: '2026-03-05', section: 'operating', net: -200 }
+    ]
+  );
 
   assert.equal(first.qc.statements_reconcile_to_ledger, true);
   assert.equal(first.qc.period_calculations_correct, true);
@@ -168,4 +185,5 @@ test('financial statements engine is period-aware, ledger-derived, deterministic
   assert.equal(first.qc.pnl_matches_revenue_expense_accounts, true);
   assert.equal(first.qc.balance_sheet_equation_valid, true);
   assert.equal(first.qc.cash_flow_matches_cash_movements, true);
+  assert.equal(first.qc.cash_flow_sections_validated, true);
 });
