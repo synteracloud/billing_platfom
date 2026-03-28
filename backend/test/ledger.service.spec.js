@@ -273,6 +273,7 @@ test('posts bill.created to expense and accounts payable idempotently', async ()
     tenant_id: 'tenant-1',
     payload: {
       bill_id: 'bill-evt-1',
+      vendor_id: 'vendor-1',
       created_at: '2025-01-21T00:00:00.000Z',
       total_minor: 3100,
       currency_code: 'USD',
@@ -577,4 +578,96 @@ test('ledger read model handles large date range volumes and remains determinist
   assert.deepEqual(first, second);
   assert.equal(first.totals.debit_total_minor, first.totals.credit_total_minor);
   assert.equal(first.accounts.find((row) => row.account_code === '1100')?.line_count, 180);
+});
+
+test('ledger read APIs enforce pagination and match repository-backed ledger exactly', async () => {
+  const { ledgerService, ledgerRepository } = createLedgerService();
+  const tenantId = 'tenant-ledger-api-match';
+
+  for (let i = 1; i <= 25; i += 1) {
+    await ledgerService.post({
+      tenant_id: tenantId,
+      source_type: 'invoice',
+      source_id: `invoice-match-${i}`,
+      source_event_id: `evt-match-${i}`,
+      event_name: 'billing.invoice.issued.v1',
+      rule_version: '1',
+      entry_date: '2026-03-10',
+      currency_code: 'USD',
+      entries: [
+        { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 100 + i, currency_code: 'USD' },
+        { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 100 + i, currency_code: 'USD' }
+      ]
+    });
+  }
+
+  assert.throws(() => ledgerService.listEntries(tenantId, {}, {}), /page is required/);
+  assert.throws(() => ledgerService.listEntries(tenantId, {}, { page: '1' }), /page_size is required/);
+
+  const page1 = ledgerService.listEntries(tenantId, {}, { page: '1', page_size: '10' });
+  const page2 = ledgerService.listEntries(tenantId, {}, { page: '2', page_size: '10' });
+  const page3 = ledgerService.listEntries(tenantId, {}, { page: '3', page_size: '10' });
+  assert.equal(page1.data.length, 10);
+  assert.equal(page2.data.length, 10);
+  assert.equal(page3.data.length, 5);
+  assert.equal(page1.meta.total, 25);
+  assert.equal(page1.meta.ledger_authoritative, true);
+  assert.equal(page1.meta.verified_source, 'ledger_repository');
+
+  const fromApiIds = [...page1.data, ...page2.data, ...page3.data].map((row) => row.journal_entry_id).sort();
+  const fromRepositoryIds = ledgerRepository.listEntries(tenantId).map((row) => row.id).sort();
+  assert.deepEqual(fromApiIds, fromRepositoryIds, 'API pages must include every repository ledger entry exactly once');
+});
+
+test('ledger read APIs filter by date/account/reference/tenant and support account endpoint pagination', async () => {
+  const { ledgerService } = createLedgerService();
+  const tenantId = 'tenant-ledger-api-filters';
+
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'invoice',
+    source_id: 'invoice-a',
+    source_event_id: 'evt-a',
+    event_name: 'billing.invoice.issued.v1',
+    rule_version: '1',
+    entry_date: '2026-01-01',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'debit', amount_minor: 200, currency_code: 'USD' },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 200, currency_code: 'USD' }
+    ]
+  });
+  await ledgerService.post({
+    tenant_id: tenantId,
+    source_type: 'payment',
+    source_id: 'payment-a',
+    source_event_id: 'evt-b',
+    event_name: 'billing.payment.settled.v1',
+    rule_version: '1',
+    entry_date: '2026-02-01',
+    currency_code: 'USD',
+    entries: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 200, currency_code: 'USD' },
+      { account_code: '1100', account_name: 'Accounts Receivable', direction: 'credit', amount_minor: 200, currency_code: 'USD' }
+    ]
+  });
+
+  const filtered = ledgerService.listEntries(tenantId, {
+    date_from: '2026-01-15',
+    date_to: '2026-12-31',
+    reference: 'evt-b'
+  }, { page: 1, page_size: 50 });
+  assert.equal(filtered.data.length, 1);
+  assert.equal(filtered.data[0].source_event_id, 'evt-b');
+
+  const accountEntries = ledgerService.listAccountEntries(tenantId, '1100', { account: '1100' }, { page: '1', page_size: '1' });
+  assert.equal(accountEntries.data.length, 1);
+  assert.equal(accountEntries.meta.total, 2);
+  assert.equal(accountEntries.meta.account_code, '1100');
+
+  const accounts = ledgerService.listAccounts(tenantId, { account: '4000' }, { page: '1', page_size: '10' });
+  assert.equal(accounts.data.length, 1);
+  assert.equal(accounts.data[0].account_code, '4000');
+
+  assert.throws(() => ledgerService.listEntries(tenantId, { tenant_id: 'other-tenant' }, { page: 1, page_size: 10 }), /tenant_id filter must match authenticated tenant/);
 });

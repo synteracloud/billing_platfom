@@ -256,7 +256,7 @@ export class ReplayRebuildToolingService {
         const openMinor = previous ? previous.open_amount_minor : totalMinor;
         apPositions.set(billId, {
           bill_id: billId,
-          vendor_id: payload.vendor_id ? String(payload.vendor_id) : 'unknown-vendor',
+          vendor_id: String(payload.vendor_id),
           currency_code: String(payload.currency_code),
           approved_at: String(payload.approved_at ?? payload.created_at),
           due_date: payload.due_date ? String(payload.due_date) : null,

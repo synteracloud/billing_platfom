@@ -236,6 +236,137 @@ test('projections include overdue invoices and future bills with deterministic o
   ]);
 });
 
+test('time-series engine aggregates ledger-derived revenue, expense, and cashflow across daily/weekly/monthly buckets', () => {
+  const tenantId = 'tenant-analytics-timeseries';
+  const ledgerRepository = new LedgerRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, new ArRepository(), new ApRepository());
+
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-1',
+    tenant_id: tenantId,
+    entry_date: '2026-01-31',
+    lines: [
+      { account_code: '1100', account_name: 'AR', direction: 'debit', amount_minor: 1000 },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 1000 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-2',
+    tenant_id: tenantId,
+    entry_date: '2026-02-01',
+    lines: [
+      { account_code: '5000', account_name: 'Expense', direction: 'debit', amount_minor: 600 },
+      { account_code: '2000', account_name: 'AP', direction: 'credit', amount_minor: 600 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-3',
+    tenant_id: tenantId,
+    entry_date: '2026-02-01',
+    lines: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 800 },
+      { account_code: '1100', account_name: 'AR', direction: 'credit', amount_minor: 800 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-4',
+    tenant_id: tenantId,
+    entry_date: '2026-02-02',
+    lines: [
+      { account_code: '2000', account_name: 'AP', direction: 'debit', amount_minor: 300 },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 300 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'ts-5',
+    tenant_id: tenantId,
+    entry_date: '2026-02-10',
+    lines: [
+      { account_code: '1100', account_name: 'AR', direction: 'debit', amount_minor: 500 },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 500 }
+    ]
+  });
+
+  const daily = analyticsService.getTimeSeries(tenantId, 'daily');
+  assert.deepEqual(daily.points, [
+    { bucket: '2026-01-31', period_from: '2026-01-31', period_to: '2026-01-31', revenue_minor: 1000, expense_minor: 0, cashflow_minor: 0 },
+    { bucket: '2026-02-01', period_from: '2026-02-01', period_to: '2026-02-01', revenue_minor: 0, expense_minor: 600, cashflow_minor: 800 },
+    { bucket: '2026-02-02', period_from: '2026-02-02', period_to: '2026-02-02', revenue_minor: 0, expense_minor: 0, cashflow_minor: -300 },
+    { bucket: '2026-02-10', period_from: '2026-02-10', period_to: '2026-02-10', revenue_minor: 500, expense_minor: 0, cashflow_minor: 0 }
+  ]);
+
+  const weekly = analyticsService.getTimeSeries(tenantId, 'weekly');
+  assert.deepEqual(weekly.points, [
+    { bucket: '2026-01-26', period_from: '2026-01-26', period_to: '2026-02-01', revenue_minor: 1000, expense_minor: 600, cashflow_minor: 800 },
+    { bucket: '2026-02-02', period_from: '2026-02-02', period_to: '2026-02-08', revenue_minor: 0, expense_minor: 0, cashflow_minor: -300 },
+    { bucket: '2026-02-09', period_from: '2026-02-09', period_to: '2026-02-15', revenue_minor: 500, expense_minor: 0, cashflow_minor: 0 }
+  ]);
+
+  const monthly = analyticsService.getTimeSeries(tenantId, 'monthly');
+  assert.deepEqual(monthly.points, [
+    { bucket: '2026-01', period_from: '2026-01-01', period_to: '2026-01-31', revenue_minor: 1000, expense_minor: 0, cashflow_minor: 0 },
+    { bucket: '2026-02', period_from: '2026-02-01', period_to: '2026-02-28', revenue_minor: 500, expense_minor: 600, cashflow_minor: 500 }
+  ]);
+
+  assert.deepEqual(daily.totals, weekly.totals);
+  assert.deepEqual(weekly.totals, monthly.totals);
+  assert.deepEqual(monthly.totals, { revenue_minor: 1500, expense_minor: 600, cashflow_minor: 500 });
+});
+
+test('time-series grouping avoids double counting and handles edge dates plus data gaps deterministically', () => {
+  const tenantId = 'tenant-analytics-timeseries-qc';
+  const ledgerRepository = new LedgerRepository();
+  const analyticsService = new AnalyticsService(ledgerRepository, new ArRepository(), new ApRepository());
+
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-1',
+    tenant_id: tenantId,
+    entry_date: '2024-12-31',
+    lines: [
+      { account_code: '1100', account_name: 'AR', direction: 'debit', amount_minor: 900 },
+      { account_code: '4000', account_name: 'Revenue', direction: 'credit', amount_minor: 900 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-2',
+    tenant_id: tenantId,
+    entry_date: '2025-01-01',
+    lines: [
+      { account_code: '5000', account_name: 'Expense', direction: 'debit', amount_minor: 400 },
+      { account_code: '2000', account_name: 'AP', direction: 'credit', amount_minor: 400 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-3',
+    tenant_id: tenantId,
+    entry_date: '2025-01-10',
+    lines: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 200 },
+      { account_code: '1010', account_name: 'Bank Clearing', direction: 'credit', amount_minor: 200 }
+    ]
+  });
+  createLedgerEntry(ledgerRepository, {
+    id: 'gap-4',
+    tenant_id: tenantId,
+    entry_date: '2025-01-10',
+    lines: [
+      { account_code: '1000', account_name: 'Cash', direction: 'debit', amount_minor: 100 },
+      { account_code: '1000', account_name: 'Cash', direction: 'credit', amount_minor: 100 }
+    ]
+  });
+
+  const weekly = analyticsService.getTimeSeries(tenantId, 'weekly');
+  assert.deepEqual(weekly.points, [
+    { bucket: '2024-12-30', period_from: '2024-12-30', period_to: '2025-01-05', revenue_minor: 900, expense_minor: 400, cashflow_minor: 0 },
+    { bucket: '2025-01-06', period_from: '2025-01-06', period_to: '2025-01-12', revenue_minor: 0, expense_minor: 0, cashflow_minor: 0 }
+  ]);
+
+  const daily = analyticsService.getTimeSeries(tenantId, 'daily');
+  assert.equal(daily.points.length, 3, 'days without ledger activity must not create synthetic buckets');
+  assert.deepEqual(daily.totals, weekly.totals);
+  assert.deepEqual(weekly.totals, { revenue_minor: 900, expense_minor: 400, cashflow_minor: 0 });
+});
+
 test('runway handles burn and edge cases with zero/negative horizon', () => {
   const tenantId = 'tenant-analytics-edge';
   const ledgerRepository = new LedgerRepository();

@@ -26,6 +26,8 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module';
 import { CashflowModule } from './modules/cashflow/cashflow.module';
 import { TaxModule } from './modules/tax/tax.module';
+import { VendorsModule } from './modules/vendors/vendors.module';
+import { BillsModule } from './modules/bills/bills.module';
 
 @Module({
   imports: [
@@ -54,7 +56,9 @@ import { TaxModule } from './modules/tax/tax.module';
     WebhooksModule,
     ReconciliationModule,
     CashflowModule,
-    TaxModule
+    TaxModule,
+    VendorsModule,
+    BillsModule
   ]
 })
 export class AppModule implements NestModule {
@@ -87,8 +91,10 @@ export class AppModule implements NestModule {
       { path: 'api/v1/ar/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/ap', method: RequestMethod.ALL },
       { path: 'api/v1/ap/(.*)', method: RequestMethod.ALL },
-      { path: 'ai', method: RequestMethod.ALL },
-      { path: 'ai/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/vendors', method: RequestMethod.ALL },
+      { path: 'api/v1/vendors/(.*)', method: RequestMethod.ALL },
+      { path: 'api/v1/bills', method: RequestMethod.ALL },
+      { path: 'api/v1/bills/(.*)', method: RequestMethod.ALL },
       { path: 'api/v1/reconciliation', method: RequestMethod.ALL },
       { path: 'api/v1/reports/cashflow', method: RequestMethod.ALL },
       { path: 'api/v1/reports/financial-statements', method: RequestMethod.ALL },

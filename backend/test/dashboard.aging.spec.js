@@ -6,6 +6,7 @@ const {
   trackBillDueStates,
   buildArInflowProjection,
   validateArInflowProjectionAccuracy,
+  buildCashflowTrends,
 } = require('../.tmp-test-dist/modules/dashboard/dashboard.service');
 
 test('assigns invoices into aging buckets without double counting and excludes closed states', () => {
@@ -147,4 +148,83 @@ test('simulates delayed payments and validates projection accuracy', () => {
 
   assert.equal(accuracy.absolute_error_minor, 1005);
   assert.equal(accuracy.accuracy_ratio > 0.89, true);
+});
+
+test('builds revenue, expense, and net cashflow trends from ledger-derived daily cash movement', () => {
+  const trends = buildCashflowTrends([
+    {
+      entry_date: '2026-03-01',
+      lines: [
+        { account_code: '1000', direction: 'debit', amount_minor: 1500 },
+        { account_code: '4000', direction: 'credit', amount_minor: 1500 },
+      ],
+    },
+    {
+      entry_date: '2026-03-01',
+      lines: [
+        { account_code: '5000', direction: 'debit', amount_minor: 700 },
+        { account_code: '1000', direction: 'credit', amount_minor: 700 },
+      ],
+    },
+    {
+      entry_date: '2026-03-02',
+      lines: [
+        { account_code: '1010', direction: 'debit', amount_minor: 300 },
+        { account_code: '4000', direction: 'credit', amount_minor: 300 },
+      ],
+    },
+    {
+      entry_date: '2026-03-03',
+      lines: [
+        { account_code: '5000', direction: 'debit', amount_minor: 900 },
+        { account_code: '1000', direction: 'credit', amount_minor: 900 },
+      ],
+    },
+    {
+      entry_date: '2026-03-03',
+      lines: [
+        { account_code: '1200', direction: 'debit', amount_minor: 1200 },
+        { account_code: '4000', direction: 'credit', amount_minor: 1200 },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(trends.revenue_trend, [
+    { date: '2026-03-01', amount_minor: 1500 },
+    { date: '2026-03-02', amount_minor: 300 },
+    { date: '2026-03-03', amount_minor: 0 },
+  ]);
+  assert.deepEqual(trends.expense_trend, [
+    { date: '2026-03-01', amount_minor: 700 },
+    { date: '2026-03-02', amount_minor: 0 },
+    { date: '2026-03-03', amount_minor: 900 },
+  ]);
+  assert.deepEqual(trends.net_cashflow_trend, [
+    { date: '2026-03-01', net_cashflow_minor: 800 },
+    { date: '2026-03-02', net_cashflow_minor: 300 },
+    { date: '2026-03-03', net_cashflow_minor: -900 },
+  ]);
+});
+
+test('returns empty trends only when there is truly zero net cash movement in the ledger', () => {
+  const trends = buildCashflowTrends([
+    {
+      entry_date: '2026-03-01',
+      lines: [
+        { account_code: '1000', direction: 'debit', amount_minor: 1000 },
+        { account_code: '1000', direction: 'credit', amount_minor: 1000 },
+      ],
+    },
+    {
+      entry_date: '2026-03-02',
+      lines: [
+        { account_code: '2000', direction: 'debit', amount_minor: 2000 },
+        { account_code: '3000', direction: 'credit', amount_minor: 2000 },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(trends.revenue_trend, []);
+  assert.deepEqual(trends.expense_trend, []);
+  assert.deepEqual(trends.net_cashflow_trend, []);
 });

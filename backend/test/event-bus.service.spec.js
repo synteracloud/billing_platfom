@@ -177,6 +177,7 @@ test('emits bill.created and bill.paid only after commit with canonical payloads
   const subscription = eventBusService.subscribe('billing.bill.created.v1', (event) => {
     delivered.push(event.type);
     assert.equal(event.payload.bill_id, 'bill-1');
+    assert.equal(event.payload.vendor_id, 'vendor-1');
     assert.equal(event.payload.currency_code, 'USD');
   });
   const paidSubscription = eventBusService.subscribe('billing.bill.paid.v1', (event) => {
@@ -195,6 +196,7 @@ test('emits bill.created and bill.paid only after commit with canonical payloads
       aggregate_version: 1,
       payload: {
         bill_id: 'bill-1',
+        vendor_id: 'vendor-1',
         created_at: '2025-02-01T00:00:00.000Z',
         total_minor: 2500,
         currency_code: 'USD',
@@ -219,4 +221,25 @@ test('emits bill.created and bill.paid only after commit with canonical payloads
 
   await Promise.all([subscription.waitForIdle(), paidSubscription.waitForIdle()]);
   assert.deepEqual(delivered, ['billing.bill.created.v1', 'billing.bill.paid.v1']);
+});
+
+test('rejects bill.created when vendor_id is missing', () => {
+  const { eventsService } = createEventsService();
+
+  assert.throws(() => {
+    eventsService.logEvent({
+      type: 'billing.bill.created.v1',
+      tenant_id: 'tenant-1',
+      aggregate_type: 'bill',
+      aggregate_id: 'bill-no-vendor',
+      aggregate_version: 1,
+      payload: {
+        bill_id: 'bill-no-vendor',
+        created_at: '2025-02-01T00:00:00.000Z',
+        total_minor: 2500,
+        currency_code: 'USD',
+        expense_classification: 'operating'
+      }
+    });
+  });
 });

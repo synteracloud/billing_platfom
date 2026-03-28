@@ -9,7 +9,7 @@ import { EventsService } from '../events/events.service';
 import { CreateAdjustmentEntryDto, CreateManualJournalEntryDto } from './dto/manual-journal-entry.dto';
 import { JournalEntryEntity } from './entities/journal-entry.entity';
 import { JournalLineDirection, JournalLineEntity } from './entities/journal-line.entity';
-import { LedgerRepository } from './ledger.repository';
+import { LedgerReadPagination, LedgerRepository } from './ledger.repository';
 import { CreateReversalEntryDto } from './dto/create-reversal-entry.dto';
 import { AccountingPeriodEntity, AccountingPeriodRepository } from './accounting-period.repository';
 
@@ -94,10 +94,23 @@ export interface PostingLineInput {
 
 
 export interface LedgerReadFilters {
+  tenant_id?: string;
   date_from?: string;
   date_to?: string;
   account_code?: string;
   reference?: string;
+}
+
+export interface LedgerPaginationInput {
+  page?: string | number;
+  page_size?: string | number;
+}
+
+export interface LedgerPageMeta {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
 }
 
 export interface AccountActivityLine {
@@ -415,41 +428,62 @@ export class LedgerService {
   }
 
   getJournalDetails(tenantId: string, filters: LedgerReadFilters = {}): JournalDetailRow[] {
-    return this.listFilteredEntries(tenantId, filters).map((entry) => {
-      const debitTotalMinor = entry.lines
-        .filter((line) => line.direction === 'debit')
-        .reduce((sum, line) => sum + line.amount_minor, 0);
-      const creditTotalMinor = entry.lines
-        .filter((line) => line.direction === 'credit')
-        .reduce((sum, line) => sum + line.amount_minor, 0);
+    return this.getJournalDetailsPage(tenantId, filters, { limit: 500 }).data;
+  }
 
-      return {
-        journal_entry_id: entry.id,
-        entry_date: entry.entry_date,
-        created_at: entry.created_at,
-        source_type: entry.source_type,
-        source_id: entry.source_id,
-        source_event_id: entry.source_event_id,
-        event_name: entry.event_name,
-        description: entry.description ?? null,
-        reference: entry.source_event_id,
-        currency_code: entry.currency_code,
-        lines: [...entry.lines],
-        debit_total_minor: debitTotalMinor,
-        credit_total_minor: creditTotalMinor
-      };
-    });
+  getJournalDetailsPage(
+    tenantId: string,
+    filters: LedgerReadFilters = {},
+    pagination: LedgerReadPagination = {}
+  ): LedgerReadPage<JournalDetailRow[]> {
+    const page = this.listFilteredEntriesPage(tenantId, filters, pagination);
+    return {
+      data: page.data.map((entry) => {
+        const debitTotalMinor = entry.lines
+          .filter((line) => line.direction === 'debit')
+          .reduce((sum, line) => sum + line.amount_minor, 0);
+        const creditTotalMinor = entry.lines
+          .filter((line) => line.direction === 'credit')
+          .reduce((sum, line) => sum + line.amount_minor, 0);
+
+        return {
+          journal_entry_id: entry.id,
+          entry_date: entry.entry_date,
+          created_at: entry.created_at,
+          source_type: entry.source_type,
+          source_id: entry.source_id,
+          source_event_id: entry.source_event_id,
+          event_name: entry.event_name,
+          description: entry.description ?? null,
+          reference: entry.source_event_id,
+          currency_code: entry.currency_code,
+          lines: [...entry.lines],
+          debit_total_minor: debitTotalMinor,
+          credit_total_minor: creditTotalMinor
+        };
+      }),
+      meta: page.meta
+    };
   }
 
   getAccountActivity(tenantId: string, filters: LedgerReadFilters = {}): AccountActivityLine[] {
+    return this.getAccountActivityPage(tenantId, filters, { limit: 500 }).data;
+  }
+
+  getAccountActivityPage(
+    tenantId: string,
+    filters: LedgerReadFilters = {},
+    pagination: LedgerReadPagination = {}
+  ): LedgerReadPage<AccountActivityLine[]> {
     const normalized = this.normalizeReadFilters(filters);
     if (!normalized.account_code) {
       throw new BadRequestException('account_code is required for account activity');
     }
     const accountCode = normalized.account_code;
     let runningBalanceMinor = 0;
-    return this.listFilteredEntries(tenantId, normalized)
-      .flatMap((entry) =>
+    const page = this.listFilteredEntriesPage(tenantId, normalized, pagination);
+    return {
+      data: page.data.flatMap((entry) =>
         entry.lines
           .filter((line) => line.account_code === accountCode)
           .map((line) => {
@@ -478,16 +512,22 @@ export class LedgerService {
               reference: entry.source_event_id
             } satisfies AccountActivityLine;
           })
-      );
+      ),
+      meta: page.meta
+    };
   }
 
   getTrialBalance(tenantId: string, filters: LedgerReadFilters = {}): {
     accounts: TrialBalanceAccountRow[];
     totals: { debit_total_minor: number; credit_total_minor: number; net_minor: number };
   } {
+    const normalized = this.normalizeReadFilters(filters);
     const accountMap = new Map<string, TrialBalanceAccountRow>();
-    for (const entry of this.listFilteredEntries(tenantId, filters)) {
+    for (const entry of this.listFilteredEntries(tenantId, normalized)) {
       for (const line of entry.lines) {
+        if (normalized.account_code && line.account_code !== normalized.account_code) {
+          continue;
+        }
         const existing = accountMap.get(line.account_code) ?? {
           account_code: line.account_code,
           account_name: line.account_name,
@@ -519,7 +559,75 @@ export class LedgerService {
       },
       { debit_total_minor: 0, credit_total_minor: 0, net_minor: 0 }
     );
-    return { accounts, totals };
+    return {
+      data: { accounts, totals },
+      meta: page.meta
+    };
+  }
+
+  listAccounts(
+    tenantId: string,
+    filters: LedgerReadFilters = {},
+    pagination: LedgerPaginationInput
+  ): {
+    data: TrialBalanceAccountRow[];
+    meta: LedgerPageMeta & { ledger_authoritative: true; verified_source: 'ledger_repository' };
+  } {
+    this.assertTenantScope(tenantId, filters.tenant_id);
+    const filtered = this.getTrialBalance(tenantId, filters).accounts;
+    const paged = this.paginateRequired(filtered, pagination);
+    return {
+      data: paged.data,
+      meta: {
+        ...paged.meta,
+        ledger_authoritative: true,
+        verified_source: 'ledger_repository'
+      }
+    };
+  }
+
+  listEntries(
+    tenantId: string,
+    filters: LedgerReadFilters = {},
+    pagination: LedgerPaginationInput
+  ): {
+    data: JournalDetailRow[];
+    meta: LedgerPageMeta & { ledger_authoritative: true; verified_source: 'ledger_repository' };
+  } {
+    this.assertTenantScope(tenantId, filters.tenant_id);
+    const filtered = this.getJournalDetails(tenantId, filters);
+    const paged = this.paginateRequired(filtered, pagination);
+    return {
+      data: paged.data,
+      meta: {
+        ...paged.meta,
+        ledger_authoritative: true,
+        verified_source: 'ledger_repository'
+      }
+    };
+  }
+
+  listAccountEntries(
+    tenantId: string,
+    accountCode: string,
+    filters: LedgerReadFilters = {},
+    pagination: LedgerPaginationInput
+  ): {
+    data: AccountActivityLine[];
+    meta: LedgerPageMeta & { ledger_authoritative: true; verified_source: 'ledger_repository'; account_code: string };
+  } {
+    this.assertTenantScope(tenantId, filters.tenant_id);
+    const filtered = this.getAccountActivity(tenantId, { ...filters, account_code: accountCode });
+    const paged = this.paginateRequired(filtered, pagination);
+    return {
+      data: paged.data,
+      meta: {
+        ...paged.meta,
+        ledger_authoritative: true,
+        verified_source: 'ledger_repository',
+        account_code: accountCode
+      }
+    };
   }
 
   createManualJournalEntry(
@@ -1125,10 +1233,16 @@ export class LedgerService {
     }
   }
 
-  private listFilteredEntries(tenantId: string, filters: LedgerReadFilters = {}): Array<JournalEntryEntity & { lines: JournalLineEntity[] }> {
+  private listFilteredEntriesPage(
+    tenantId: string,
+    filters: LedgerReadFilters = {},
+    pagination: LedgerReadPagination = {}
+  ): LedgerReadPage<Array<JournalEntryEntity & { lines: JournalLineEntity[] }>> {
     const normalized = this.normalizeReadFilters(filters);
-    return this.ledgerRepository
-      .listEntries(tenantId)
+    const sourceEntries = normalized.account_code
+      ? this.ledgerRepository.listEntriesByAccount(tenantId, normalized.account_code)
+      : this.ledgerRepository.listEntries(tenantId);
+    return sourceEntries
       .filter((entry) => {
         if (normalized.date_from && entry.entry_date < normalized.date_from) {
           return false;
@@ -1146,18 +1260,16 @@ export class LedgerService {
             return false;
           }
         }
-        return true;
-      })
-      .sort((left, right) => left.entry_date.localeCompare(right.entry_date)
-        || left.created_at.localeCompare(right.created_at)
-        || left.id.localeCompare(right.id));
+      }
+    };
   }
 
   private normalizeReadFilters(filters: LedgerReadFilters): LedgerReadFilters {
     const normalized: LedgerReadFilters = {
+      tenant_id: filters.tenant_id?.trim() || undefined,
       date_from: filters.date_from?.trim() || undefined,
       date_to: filters.date_to?.trim() || undefined,
-      account_code: filters.account_code?.trim() || undefined,
+      account_code: filters.account_code?.trim() || (filters as { account?: string }).account?.trim() || undefined,
       reference: filters.reference?.trim() || undefined
     };
     if (normalized.date_from && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date_from)) {
@@ -1167,5 +1279,52 @@ export class LedgerService {
       throw new BadRequestException('date_to must be in YYYY-MM-DD format');
     }
     return normalized;
+  }
+
+  private assertTenantScope(authTenantId: string, requestedTenantId?: string): void {
+    const normalizedRequestedTenantId = requestedTenantId?.trim();
+    if (normalizedRequestedTenantId && normalizedRequestedTenantId !== authTenantId) {
+      throw new ForbiddenException('tenant_id filter must match authenticated tenant');
+    }
+  }
+
+  private paginateRequired<T>(
+    rows: T[],
+    pagination: LedgerPaginationInput
+  ): {
+    data: T[];
+    meta: LedgerPageMeta;
+  } {
+    const page = this.parseRequiredPositiveInteger(pagination.page, 'page');
+    const pageSize = this.parseRequiredPositiveInteger(pagination.page_size, 'page_size');
+    const maxPageSize = 500;
+    if (pageSize > maxPageSize) {
+      throw new BadRequestException(`page_size must be less than or equal to ${maxPageSize}`);
+    }
+
+    const total = rows.length;
+    const offset = (page - 1) * pageSize;
+    const data = rows.slice(offset, offset + pageSize);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    return {
+      data,
+      meta: {
+        page,
+        page_size: pageSize,
+        total,
+        total_pages: totalPages
+      }
+    };
+  }
+
+  private parseRequiredPositiveInteger(value: string | number | undefined, field: 'page' | 'page_size'): number {
+    if (value === undefined || value === null || value === '') {
+      throw new BadRequestException(`${field} is required`);
+    }
+    const parsed = typeof value === 'number' ? value : Number.parseInt(value, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new BadRequestException(`${field} must be a positive integer`);
+    }
+    return parsed;
   }
 }
