@@ -1,7 +1,6 @@
 import { Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { DomainEventType } from '../entities/event.entity';
 import { EventConsumerIdempotencyService } from '../../idempotency/event-consumer-idempotency.service';
-import { DomainEventType } from '../entities/event.entity';
 import { EVENT_QUEUE_DRIVER } from './queue.constants';
 import { EventProcessingRegistry } from './event-processing.registry';
 import { QueueDriver, QueueJob } from './event-queue.types';
@@ -43,9 +42,11 @@ export class EventProcessingWorker implements OnApplicationBootstrap, OnModuleDe
         consumerName,
         async () => {
           await handler.handle(job.data);
-          this.logger.log(
-            `Processed ${job.data.event_name} event ${job.data.event_id} on attempt ${job.attemptsMade + 1}`
-          );
+          if (job.attemptsMade > 0) {
+            this.logger.log(
+              `Processed ${job.data.event_name} event ${job.data.event_id} on retry attempt ${job.attemptsMade + 1}`
+            );
+          }
           return true;
         }
       );
