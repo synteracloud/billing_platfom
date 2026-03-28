@@ -227,8 +227,29 @@ export class LedgerService {
     return saved;
   }
 
-  reopenPeriod(tenantId: string, period: string, reopenReason: string, actor: { actor_id: string; role: UserRole }): AccountingPeriodEntity {
+  reopenPeriod(
+    tenantId: string,
+    period: string,
+    reopenReason: string,
+    actor: { actor_id: string; role: UserRole },
+    approvalRequestId?: string
+  ): AccountingPeriodEntity {
     this.assertPrivilegedRole(actor.role, 'Only admins can reopen accounting periods');
+    if (!this.approvalService) {
+      throw new ConflictException('period_reopen approval enforcement is unavailable');
+    }
+
+    this.approvalService.enforceApprovalGate(tenantId, 'period_reopen', {
+      actor_id: actor.actor_id,
+      amount_minor: 0,
+      approval_request_id: approvalRequestId,
+      correlation_id: period,
+      context: {
+        period,
+        reopen_reason: reopenReason
+      }
+    });
+
     const reason = reopenReason?.trim();
     if (!reason) {
       throw new BadRequestException('reopen_reason is required');
@@ -374,17 +395,6 @@ export class LedgerService {
         throw new BadRequestException('rule_version is required');
       }
 
-      this.approvalService?.enforceApprovalGate(normalizedTenantId, 'manual_journal_entry', {
-        actor_id: 'system',
-        amount_minor: 0,
-        approval_request_id: approvalRequestId,
-        correlation_id: eventId,
-        context: {
-          event_id: eventId,
-          rule_version: normalizedRuleVersion
-        }
-      });
-
       if (normalizedRequestKey) {
         const boundEntry = this.ledgerRepository.findByRequestIdempotency(normalizedTenantId, normalizedRequestKey);
         if (boundEntry && boundEntry.source_event_id !== eventId) {
@@ -397,6 +407,20 @@ export class LedgerService {
       }
 
       return this.eventsService.consumeEventOnce(normalizedTenantId, `ledger-posting:${normalizedRuleVersion}`, eventId, async (event) => {
+        if (this.requiresManualApproval(event.type)) {
+          this.approvalService?.enforceApprovalGate(normalizedTenantId, 'manual_journal_entry', {
+            actor_id: 'system',
+            amount_minor: 0,
+            approval_request_id: approvalRequestId,
+            correlation_id: eventId,
+            context: {
+              event_id: eventId,
+              rule_version: normalizedRuleVersion,
+              event_type: event.type
+            }
+          });
+        }
+
         const existing = this.ledgerRepository.findBySourceEvent(normalizedTenantId, event.id, normalizedRuleVersion);
         if (existing) {
           if (normalizedRequestKey) {
@@ -1203,6 +1227,12 @@ export class LedgerService {
       return;
     }
     this.assertPostingAllowedForPeriod(tenantId, entryDate, sourceEventId);
+  }
+
+  private requiresManualApproval(eventType: string): boolean {
+    return eventType === 'accounting.manual.journal.posted.v1'
+      || eventType === 'accounting.adjustment.journal.posted.v1'
+      || eventType === 'accounting.journal.reversed.v1';
   }
 
   private normalizePeriod(period: string): { period_start: string; period_end: string } {
