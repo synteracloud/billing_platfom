@@ -20,6 +20,33 @@ interface CashflowDailyRow {
   net_cashflow_minor: number;
 }
 
+interface ComparativeMetricVariance {
+  current_minor: number;
+  comparison_minor: number;
+  variance_minor: number;
+  variance_bps: number | null;
+}
+
+interface PeriodComparison {
+  period_from: string;
+  period_to: string;
+  profit_and_loss: {
+    revenue_minor: ComparativeMetricVariance;
+    expense_minor: ComparativeMetricVariance;
+    net_income_minor: ComparativeMetricVariance;
+  };
+  cash_flow_statement: {
+    inflows_minor: ComparativeMetricVariance;
+    outflows_minor: ComparativeMetricVariance;
+    net_cashflow_minor: ComparativeMetricVariance;
+  };
+  balance_sheet: {
+    assets_minor: ComparativeMetricVariance;
+    liabilities_minor: ComparativeMetricVariance;
+    equity_minor: ComparativeMetricVariance;
+  };
+}
+
 export interface FinancialStatementsReport {
   period_from: string;
   period_to: string;
@@ -47,6 +74,10 @@ export interface FinancialStatementsReport {
     net_cashflow_minor: number;
     account_balances: AccountBalanceRow[];
     daily: CashflowDailyRow[];
+  };
+  comparisons: {
+    mom: PeriodComparison;
+    yoy: PeriodComparison;
   };
   qc: {
     ledger_authoritative: true;
@@ -82,75 +113,168 @@ export class FinancialStatementsService {
       .listEntries(tenantId)
       .sort((left, right) => left.entry_date.localeCompare(right.entry_date) || left.id.localeCompare(right.id));
 
-    const entriesInPeriod = ledgerEntries.filter((entry) => entry.entry_date >= normalizedFrom && entry.entry_date <= normalizedTo);
-    const entriesToDate = ledgerEntries.filter((entry) => entry.entry_date <= normalizedTo);
-    const entriesBeforePeriod = ledgerEntries.filter((entry) => entry.entry_date < normalizedFrom);
-
-    const periodAccountBalances = this.computeBalances(entriesInPeriod.flatMap((entry) => entry.lines));
-    const cumulativeAccountBalances = this.computeBalances(entriesToDate.flatMap((entry) => entry.lines));
-    const openingAccountBalances = this.computeBalances(entriesBeforePeriod.flatMap((entry) => entry.lines));
-
-    const revenueMinor = this.sumByType(periodAccountBalances, ['revenue']) - this.sumByType(periodAccountBalances, ['contra_revenue']);
-    const expenseMinor = this.sumByType(periodAccountBalances, ['expense']);
-    const netIncomeMinor = revenueMinor - expenseMinor;
-
-    const assetsMinor = this.sumByType(cumulativeAccountBalances, ['asset']);
-    const liabilitiesMinor = this.sumByType(cumulativeAccountBalances, ['liability']);
-    const equityMinor =
-      this.sumByType(cumulativeAccountBalances, ['revenue']) -
-      this.sumByType(cumulativeAccountBalances, ['contra_revenue']) -
-      this.sumByType(cumulativeAccountBalances, ['expense']);
-
-    const openingCashMinor = this.sumByCodes(openingAccountBalances, CASH_ACCOUNT_CODES);
-    const closingCashMinor = this.sumByCodes(cumulativeAccountBalances, CASH_ACCOUNT_CODES);
-
-    const { daily, inflowsMinor, outflowsMinor } = this.computeCashflow(entriesInPeriod);
-    const netCashflowMinor = inflowsMinor - outflowsMinor;
-
-    const equationDeltaMinor = assetsMinor - (liabilitiesMinor + equityMinor);
+    const currentPeriod = this.computeStatementSlice(ledgerEntries, normalizedFrom, normalizedTo, true);
+    const momPeriod = this.computeStatementSlice(
+      ledgerEntries,
+      this.shiftDate(normalizedFrom, 0, -1),
+      this.shiftDate(normalizedTo, 0, -1),
+      false
+    );
+    const yoyPeriod = this.computeStatementSlice(
+      ledgerEntries,
+      this.shiftDate(normalizedFrom, -1, 0),
+      this.shiftDate(normalizedTo, -1, 0),
+      false
+    );
 
     const qc = {
       ledger_authoritative: true as const,
       reproducible: true as const,
       no_mutation_leaks: true as const,
       no_double_counting: true as const,
-      statements_reconcile_to_ledger: equationDeltaMinor === 0 && netCashflowMinor === closingCashMinor - openingCashMinor,
-      period_calculations_correct: entriesInPeriod.every((entry) => entry.entry_date >= normalizedFrom && entry.entry_date <= normalizedTo),
-      pnl_matches_revenue_expense_accounts: netIncomeMinor === revenueMinor - expenseMinor,
-      balance_sheet_equation_valid: equationDeltaMinor === 0,
-      cash_flow_matches_cash_movements: netCashflowMinor === closingCashMinor - openingCashMinor
+      statements_reconcile_to_ledger:
+        currentPeriod.equationDeltaMinor === 0 && currentPeriod.netCashflowMinor === currentPeriod.closingCashMinor - currentPeriod.openingCashMinor,
+      period_calculations_correct: currentPeriod.periodBoundariesValid,
+      pnl_matches_revenue_expense_accounts: currentPeriod.netIncomeMinor === currentPeriod.revenueMinor - currentPeriod.expenseMinor,
+      balance_sheet_equation_valid: currentPeriod.equationDeltaMinor === 0,
+      cash_flow_matches_cash_movements:
+        currentPeriod.netCashflowMinor === currentPeriod.closingCashMinor - currentPeriod.openingCashMinor
     };
 
     return this.freezeDeep({
       period_from: normalizedFrom,
       period_to: normalizedTo,
       profit_and_loss: {
-        revenue_minor: revenueMinor,
-        expense_minor: expenseMinor,
-        net_income_minor: netIncomeMinor,
-        account_balances: this.toRows(periodAccountBalances, new Set(['revenue', 'expense', 'contra_revenue']))
+        revenue_minor: currentPeriod.revenueMinor,
+        expense_minor: currentPeriod.expenseMinor,
+        net_income_minor: currentPeriod.netIncomeMinor,
+        account_balances: this.toRows(currentPeriod.periodAccountBalances, new Set(['revenue', 'expense', 'contra_revenue']))
       },
       balance_sheet: {
         as_of: normalizedTo,
-        assets_minor: assetsMinor,
-        liabilities_minor: liabilitiesMinor,
-        equity_minor: equityMinor,
-        equation_delta_minor: equationDeltaMinor,
-        account_balances: this.toRows(cumulativeAccountBalances, new Set(['asset', 'liability']))
+        assets_minor: currentPeriod.assetsMinor,
+        liabilities_minor: currentPeriod.liabilitiesMinor,
+        equity_minor: currentPeriod.equityMinor,
+        equation_delta_minor: currentPeriod.equationDeltaMinor,
+        account_balances: this.toRows(currentPeriod.cumulativeAccountBalances, new Set(['asset', 'liability']))
       },
       cash_flow_statement: {
         period_from: normalizedFrom,
         period_to: normalizedTo,
-        opening_cash_minor: openingCashMinor,
-        closing_cash_minor: closingCashMinor,
-        inflows_minor: inflowsMinor,
-        outflows_minor: outflowsMinor,
-        net_cashflow_minor: netCashflowMinor,
-        account_balances: this.toRows(periodAccountBalances, new Set(['asset'])).filter((row) => CASH_ACCOUNT_CODES.has(row.account_code)),
-        daily
+        opening_cash_minor: currentPeriod.openingCashMinor,
+        closing_cash_minor: currentPeriod.closingCashMinor,
+        inflows_minor: currentPeriod.inflowsMinor,
+        outflows_minor: currentPeriod.outflowsMinor,
+        net_cashflow_minor: currentPeriod.netCashflowMinor,
+        account_balances: this.toRows(currentPeriod.periodAccountBalances, new Set(['asset'])).filter((row) =>
+          CASH_ACCOUNT_CODES.has(row.account_code)
+        ),
+        daily: currentPeriod.daily
+      },
+      comparisons: {
+        mom: this.buildComparison(currentPeriod, momPeriod),
+        yoy: this.buildComparison(currentPeriod, yoyPeriod)
       },
       qc
     });
+  }
+
+  private computeStatementSlice(
+    ledgerEntries: Array<{ entry_date: string; id: string; lines: JournalLineEntity[] }>,
+    periodFrom: string,
+    periodTo: string,
+    includeDaily: boolean
+  ) {
+    const entriesInPeriod = ledgerEntries.filter((entry) => entry.entry_date >= periodFrom && entry.entry_date <= periodTo);
+    const entriesToDate = ledgerEntries.filter((entry) => entry.entry_date <= periodTo);
+    const entriesBeforePeriod = ledgerEntries.filter((entry) => entry.entry_date < periodFrom);
+    const periodAccountBalances = this.computeBalances(entriesInPeriod.flatMap((entry) => entry.lines));
+    const cumulativeAccountBalances = this.computeBalances(entriesToDate.flatMap((entry) => entry.lines));
+    const openingAccountBalances = this.computeBalances(entriesBeforePeriod.flatMap((entry) => entry.lines));
+    const revenueMinor = this.sumByType(periodAccountBalances, ['revenue']) - this.sumByType(periodAccountBalances, ['contra_revenue']);
+    const expenseMinor = this.sumByType(periodAccountBalances, ['expense']);
+    const netIncomeMinor = revenueMinor - expenseMinor;
+    const assetsMinor = this.sumByType(cumulativeAccountBalances, ['asset']);
+    const liabilitiesMinor = this.sumByType(cumulativeAccountBalances, ['liability']);
+    const equityMinor =
+      this.sumByType(cumulativeAccountBalances, ['revenue']) -
+      this.sumByType(cumulativeAccountBalances, ['contra_revenue']) -
+      this.sumByType(cumulativeAccountBalances, ['expense']);
+    const openingCashMinor = this.sumByCodes(openingAccountBalances, CASH_ACCOUNT_CODES);
+    const closingCashMinor = this.sumByCodes(cumulativeAccountBalances, CASH_ACCOUNT_CODES);
+    const { daily, inflowsMinor, outflowsMinor } = this.computeCashflow(entriesInPeriod);
+    const netCashflowMinor = inflowsMinor - outflowsMinor;
+    const equationDeltaMinor = assetsMinor - (liabilitiesMinor + equityMinor);
+
+    return {
+      periodFrom,
+      periodTo,
+      entriesInPeriod,
+      periodAccountBalances,
+      cumulativeAccountBalances,
+      revenueMinor,
+      expenseMinor,
+      netIncomeMinor,
+      assetsMinor,
+      liabilitiesMinor,
+      equityMinor,
+      openingCashMinor,
+      closingCashMinor,
+      inflowsMinor,
+      outflowsMinor,
+      netCashflowMinor,
+      equationDeltaMinor,
+      periodBoundariesValid: entriesInPeriod.every((entry) => entry.entry_date >= periodFrom && entry.entry_date <= periodTo),
+      daily: includeDaily ? daily : []
+    };
+  }
+
+  private buildComparison(
+    current: ReturnType<FinancialStatementsService['computeStatementSlice']>,
+    comparison: ReturnType<FinancialStatementsService['computeStatementSlice']>
+  ): PeriodComparison {
+    return {
+      period_from: comparison.periodFrom,
+      period_to: comparison.periodTo,
+      profit_and_loss: {
+        revenue_minor: this.buildVariance(current.revenueMinor, comparison.revenueMinor),
+        expense_minor: this.buildVariance(current.expenseMinor, comparison.expenseMinor),
+        net_income_minor: this.buildVariance(current.netIncomeMinor, comparison.netIncomeMinor)
+      },
+      cash_flow_statement: {
+        inflows_minor: this.buildVariance(current.inflowsMinor, comparison.inflowsMinor),
+        outflows_minor: this.buildVariance(current.outflowsMinor, comparison.outflowsMinor),
+        net_cashflow_minor: this.buildVariance(current.netCashflowMinor, comparison.netCashflowMinor)
+      },
+      balance_sheet: {
+        assets_minor: this.buildVariance(current.assetsMinor, comparison.assetsMinor),
+        liabilities_minor: this.buildVariance(current.liabilitiesMinor, comparison.liabilitiesMinor),
+        equity_minor: this.buildVariance(current.equityMinor, comparison.equityMinor)
+      }
+    };
+  }
+
+  private buildVariance(currentMinor: number, comparisonMinor: number): ComparativeMetricVariance {
+    const varianceMinor = currentMinor - comparisonMinor;
+    const varianceBps = comparisonMinor === 0 ? null : Math.round((varianceMinor * 10_000) / Math.abs(comparisonMinor));
+    return {
+      current_minor: currentMinor,
+      comparison_minor: comparisonMinor,
+      variance_minor: varianceMinor,
+      variance_bps: varianceBps
+    };
+  }
+
+  private shiftDate(value: string, yearDelta: number, monthDelta: number): string {
+    const [yearString, monthString, dayString] = value.split('-');
+    const year = Number(yearString);
+    const month = Number(monthString);
+    const day = Number(dayString);
+    const shiftedMonthDate = new Date(Date.UTC(year + yearDelta, month - 1 + monthDelta, 1));
+    const lastDayOfMonth = new Date(Date.UTC(shiftedMonthDate.getUTCFullYear(), shiftedMonthDate.getUTCMonth() + 1, 0)).getUTCDate();
+    const clampedDay = Math.min(day, lastDayOfMonth);
+    const date = new Date(Date.UTC(shiftedMonthDate.getUTCFullYear(), shiftedMonthDate.getUTCMonth(), clampedDay));
+    return date.toISOString().slice(0, 10);
   }
 
   private computeCashflow(entries: Array<{ entry_date: string; id: string; lines: JournalLineEntity[] }>): {
