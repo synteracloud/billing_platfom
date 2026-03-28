@@ -3,6 +3,7 @@ const path = require('path');
 const ts = require('/root/.nvm/versions/node/v22.21.1/lib/node_modules/typescript');
 
 const sourceFiles = [
+  'src/common/transactions/financial-transaction.manager.ts',
   'src/modules/idempotency/entities/idempotency-key.entity.ts',
   'src/modules/idempotency/idempotency.repository.ts',
   'src/modules/idempotency/idempotency.service.ts',
@@ -16,6 +17,9 @@ const sourceFiles = [
   'src/modules/events/queue/in-memory-queue.driver.ts',
   'src/modules/events/queue/queue.constants.ts',
   'src/modules/events/queue/event-queue.publisher.ts',
+  'src/modules/ledger/entities/journal-entry.entity.ts',
+  'src/modules/ledger/entities/journal-line.entity.ts',
+  'src/modules/ledger/ledger.repository.ts',
   'src/modules/ap/ap.repository.ts',
   'src/modules/ap/ap.service.ts',
   'src/modules/ap/ap-readonly.guard.ts'
