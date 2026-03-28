@@ -9,6 +9,7 @@ const sourceFiles = [
   'src/modules/ledger/entities/journal-entry.entity.ts',
   'src/modules/ledger/entities/journal-line.entity.ts',
   'src/modules/ledger/ledger.repository.ts',
+  'src/modules/ledger/accounting-period.repository.ts',
   'src/modules/events/entities/event.entity.ts',
   'src/modules/events/domain-event.validator.ts',
   'src/modules/events/events.repository.ts',

@@ -5,6 +5,7 @@ import { JournalLineEntity } from '../ledger/entities/journal-line.entity';
 import { LedgerRepository } from '../ledger/ledger.repository';
 
 type BalanceBucket = 'asset' | 'liability' | 'revenue' | 'expense' | 'contra_revenue';
+type CashflowSectionName = 'operating' | 'investing' | 'financing';
 
 interface AccountBalanceRow {
   account_code: string;
@@ -17,6 +18,23 @@ interface CashflowDailyRow {
   date: string;
   inflows_minor: number;
   outflows_minor: number;
+  net_cashflow_minor: number;
+}
+
+interface CashflowSectionTotals {
+  inflows_minor: number;
+  outflows_minor: number;
+  net_cashflow_minor: number;
+}
+
+interface CashflowMovementRow {
+  entry_id: string;
+  date: string;
+  source_type: string;
+  source_id: string;
+  section: CashflowSectionName;
+  inflow_minor: number;
+  outflow_minor: number;
   net_cashflow_minor: number;
 }
 
@@ -45,7 +63,9 @@ export interface FinancialStatementsReport {
     inflows_minor: number;
     outflows_minor: number;
     net_cashflow_minor: number;
+    sections: Record<CashflowSectionName, CashflowSectionTotals>;
     account_balances: AccountBalanceRow[];
+    movements: CashflowMovementRow[];
     daily: CashflowDailyRow[];
   };
   qc: {
@@ -58,6 +78,7 @@ export interface FinancialStatementsReport {
     pnl_matches_revenue_expense_accounts: boolean;
     balance_sheet_equation_valid: boolean;
     cash_flow_matches_cash_movements: boolean;
+    cash_flow_sections_validated: boolean;
   };
 }
 
@@ -65,6 +86,7 @@ const ACCOUNT_TYPES = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((account) => [accoun
 const CASH_ACCOUNT_CODES = new Set(
   DEFAULT_CHART_OF_ACCOUNTS.filter((account) => account.key === 'cash' || account.key === 'bank_clearing').map((account) => account.code)
 );
+const OPERATING_WORKING_CAPITAL_CODES = new Set(['1100', '2000', '2200']);
 
 @Injectable()
 export class FinancialStatementsService {
@@ -104,10 +126,13 @@ export class FinancialStatementsService {
     const openingCashMinor = this.sumByCodes(openingAccountBalances, CASH_ACCOUNT_CODES);
     const closingCashMinor = this.sumByCodes(cumulativeAccountBalances, CASH_ACCOUNT_CODES);
 
-    const { daily, inflowsMinor, outflowsMinor } = this.computeCashflow(entriesInPeriod);
+    const { daily, inflowsMinor, outflowsMinor, sections, movements } = this.computeCashflow(entriesInPeriod);
     const netCashflowMinor = inflowsMinor - outflowsMinor;
 
     const equationDeltaMinor = assetsMinor - (liabilitiesMinor + equityMinor);
+    const sectionTotals = Object.values(sections);
+    const sectionsInflowMinor = sectionTotals.reduce((sum, section) => sum + section.inflows_minor, 0);
+    const sectionsOutflowMinor = sectionTotals.reduce((sum, section) => sum + section.outflows_minor, 0);
 
     const qc = {
       ledger_authoritative: true as const,
@@ -118,7 +143,11 @@ export class FinancialStatementsService {
       period_calculations_correct: entriesInPeriod.every((entry) => entry.entry_date >= normalizedFrom && entry.entry_date <= normalizedTo),
       pnl_matches_revenue_expense_accounts: netIncomeMinor === revenueMinor - expenseMinor,
       balance_sheet_equation_valid: equationDeltaMinor === 0,
-      cash_flow_matches_cash_movements: netCashflowMinor === closingCashMinor - openingCashMinor
+      cash_flow_matches_cash_movements: netCashflowMinor === closingCashMinor - openingCashMinor,
+      cash_flow_sections_validated:
+        sectionsInflowMinor === inflowsMinor &&
+        sectionsOutflowMinor === outflowsMinor &&
+        sectionTotals.every((section) => section.net_cashflow_minor === section.inflows_minor - section.outflows_minor)
     };
 
     return this.freezeDeep({
@@ -146,21 +175,27 @@ export class FinancialStatementsService {
         inflows_minor: inflowsMinor,
         outflows_minor: outflowsMinor,
         net_cashflow_minor: netCashflowMinor,
+        sections,
         account_balances: this.toRows(periodAccountBalances, new Set(['asset'])).filter((row) => CASH_ACCOUNT_CODES.has(row.account_code)),
+        movements,
         daily
       },
       qc
     });
   }
 
-  private computeCashflow(entries: Array<{ entry_date: string; id: string; lines: JournalLineEntity[] }>): {
+  private computeCashflow(entries: Array<{ entry_date: string; id: string; source_type: string; source_id: string; lines: JournalLineEntity[] }>): {
     daily: CashflowDailyRow[];
     inflowsMinor: number;
     outflowsMinor: number;
+    sections: Record<CashflowSectionName, CashflowSectionTotals>;
+    movements: CashflowMovementRow[];
   } {
     const daily = new Map<string, { inflows_minor: number; outflows_minor: number }>();
     let inflowsMinor = 0;
     let outflowsMinor = 0;
+    const sections = this.initializeSections();
+    const movements: CashflowMovementRow[] = [];
 
     for (const entry of entries) {
       const netCashMovement = entry.lines.reduce((sum, line) => {
@@ -170,14 +205,20 @@ export class FinancialStatementsService {
         return sum + this.asSignedBalance(line);
       }, 0);
 
-      if (netCashMovement > 0) {
-        inflowsMinor += netCashMovement;
-      } else if (netCashMovement < 0) {
-        outflowsMinor += Math.abs(netCashMovement);
-      }
-
       if (netCashMovement === 0) {
         continue;
+      }
+
+      const sectionName = this.classifyCashflowSection(entry.lines);
+      const section = sections[sectionName];
+
+      if (netCashMovement > 0) {
+        inflowsMinor += netCashMovement;
+        section.inflows_minor += netCashMovement;
+      } else {
+        const outflow = Math.abs(netCashMovement);
+        outflowsMinor += outflow;
+        section.outflows_minor += outflow;
       }
 
       const day = daily.get(entry.entry_date) ?? { inflows_minor: 0, outflows_minor: 0 };
@@ -187,17 +228,81 @@ export class FinancialStatementsService {
         day.outflows_minor += Math.abs(netCashMovement);
       }
       daily.set(entry.entry_date, day);
+
+      movements.push({
+        entry_id: entry.id,
+        date: entry.entry_date,
+        source_type: entry.source_type,
+        source_id: entry.source_id,
+        section: sectionName,
+        inflow_minor: Math.max(netCashMovement, 0),
+        outflow_minor: Math.abs(Math.min(netCashMovement, 0)),
+        net_cashflow_minor: netCashMovement
+      });
+    }
+
+    for (const section of Object.values(sections)) {
+      section.net_cashflow_minor = section.inflows_minor - section.outflows_minor;
     }
 
     return {
       inflowsMinor,
       outflowsMinor,
+      sections,
+      movements,
       daily: [...daily.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, totals]) => ({
         date,
         inflows_minor: totals.inflows_minor,
         outflows_minor: totals.outflows_minor,
         net_cashflow_minor: totals.inflows_minor - totals.outflows_minor
       }))
+    };
+  }
+
+  private classifyCashflowSection(lines: JournalLineEntity[]): CashflowSectionName {
+    const nonCashLines = lines.filter((line) => !CASH_ACCOUNT_CODES.has(line.account_code));
+    if (nonCashLines.length === 0) {
+      return 'operating';
+    }
+
+    const hasOperating = nonCashLines.some((line) => {
+      const type = this.resolveAccountType(line.account_code);
+      return (
+        type === 'revenue' ||
+        type === 'expense' ||
+        type === 'contra_revenue' ||
+        OPERATING_WORKING_CAPITAL_CODES.has(line.account_code)
+      );
+    });
+    if (hasOperating) {
+      return 'operating';
+    }
+
+    const hasFinancing = nonCashLines.some((line) => this.resolveAccountType(line.account_code) === 'liability');
+    if (hasFinancing) {
+      return 'financing';
+    }
+
+    return 'investing';
+  }
+
+  private initializeSections(): Record<CashflowSectionName, CashflowSectionTotals> {
+    return {
+      operating: {
+        inflows_minor: 0,
+        outflows_minor: 0,
+        net_cashflow_minor: 0
+      },
+      investing: {
+        inflows_minor: 0,
+        outflows_minor: 0,
+        net_cashflow_minor: 0
+      },
+      financing: {
+        inflows_minor: 0,
+        outflows_minor: 0,
+        net_cashflow_minor: 0
+      }
     };
   }
 
