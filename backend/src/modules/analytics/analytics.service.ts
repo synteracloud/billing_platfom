@@ -4,6 +4,39 @@ import { ArRepository } from '../ar/ar.repository';
 import { LedgerRepository } from '../ledger/ledger.repository';
 
 const CASH_ACCOUNT_CODES = new Set(['1000', '1010']);
+const ACCOUNT_TYPES = new Map<string, 'asset' | 'liability' | 'revenue' | 'expense' | 'contra_revenue'>([
+  ['1000', 'asset'],
+  ['1010', 'asset'],
+  ['1100', 'asset'],
+  ['2000', 'liability'],
+  ['2100', 'liability'],
+  ['2200', 'liability'],
+  ['4000', 'revenue'],
+  ['5000', 'expense'],
+  ['5010', 'expense']
+]);
+
+export type TimeSeriesBucket = 'daily' | 'weekly' | 'monthly';
+
+export interface TimeSeriesPoint {
+  bucket: string;
+  period_from: string;
+  period_to: string;
+  revenue_minor: number;
+  expense_minor: number;
+  cashflow_minor: number;
+}
+
+export interface TimeSeriesReport {
+  bucket: TimeSeriesBucket;
+  currency_code: string;
+  totals: {
+    revenue_minor: number;
+    expense_minor: number;
+    cashflow_minor: number;
+  };
+  points: TimeSeriesPoint[];
+}
 
 export type TransactionClassificationCategory =
   | 'expense'
@@ -194,6 +227,80 @@ export class AnalyticsService {
       currency_code: currencyCode,
       totals,
       by_day: byDay
+    };
+  }
+
+  getTimeSeries(tenantId: string, bucket: TimeSeriesBucket = 'daily'): TimeSeriesReport {
+    const dayTotals = new Map<string, { revenue_minor: number; expense_minor: number; cashflow_minor: number }>();
+    let currencyCode = 'USD';
+
+    for (const entry of this.ledgerRepository.listEntries(tenantId)) {
+      currencyCode = entry.currency_code || currencyCode;
+      const current = dayTotals.get(entry.entry_date) ?? { revenue_minor: 0, expense_minor: 0, cashflow_minor: 0 };
+
+      for (const line of entry.lines) {
+        const accountType = ACCOUNT_TYPES.get(line.account_code);
+
+        if (accountType === 'revenue' || accountType === 'contra_revenue') {
+          current.revenue_minor += line.direction === 'credit' ? line.amount_minor : -line.amount_minor;
+        }
+
+        if (accountType === 'expense') {
+          current.expense_minor += line.direction === 'debit' ? line.amount_minor : -line.amount_minor;
+        }
+
+        if (CASH_ACCOUNT_CODES.has(line.account_code)) {
+          current.cashflow_minor += line.direction === 'debit' ? line.amount_minor : -line.amount_minor;
+        }
+      }
+
+      dayTotals.set(entry.entry_date, current);
+    }
+
+    const groupedTotals = new Map<string, { period_from: string; period_to: string; revenue_minor: number; expense_minor: number; cashflow_minor: number }>();
+
+    for (const [date, totals] of dayTotals.entries()) {
+      const bucketWindow = this.getBucketWindow(date, bucket);
+      const grouped = groupedTotals.get(bucketWindow.key) ?? {
+        period_from: bucketWindow.period_from,
+        period_to: bucketWindow.period_to,
+        revenue_minor: 0,
+        expense_minor: 0,
+        cashflow_minor: 0
+      };
+
+      grouped.revenue_minor += totals.revenue_minor;
+      grouped.expense_minor += totals.expense_minor;
+      grouped.cashflow_minor += totals.cashflow_minor;
+      groupedTotals.set(bucketWindow.key, grouped);
+    }
+
+    const points = Array.from(groupedTotals.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([bucketKey, totals]) => ({
+        bucket: bucketKey,
+        period_from: totals.period_from,
+        period_to: totals.period_to,
+        revenue_minor: totals.revenue_minor,
+        expense_minor: totals.expense_minor,
+        cashflow_minor: totals.cashflow_minor
+      }));
+
+    const reportTotals = points.reduce(
+      (acc, point) => {
+        acc.revenue_minor += point.revenue_minor;
+        acc.expense_minor += point.expense_minor;
+        acc.cashflow_minor += point.cashflow_minor;
+        return acc;
+      },
+      { revenue_minor: 0, expense_minor: 0, cashflow_minor: 0 }
+    );
+
+    return {
+      bucket,
+      currency_code: currencyCode,
+      totals: reportTotals,
+      points
     };
   }
 
@@ -661,5 +768,37 @@ export class AnalyticsService {
     }
 
     return Math.max(0, Math.round(value));
+  }
+
+  private getBucketWindow(date: string, bucket: TimeSeriesBucket): { key: string; period_from: string; period_to: string } {
+    if (bucket === 'daily') {
+      return { key: date, period_from: date, period_to: date };
+    }
+
+    const parsed = new Date(`${date}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime())) {
+      return { key: date, period_from: date, period_to: date };
+    }
+
+    if (bucket === 'weekly') {
+      const dayOfWeek = parsed.getUTCDay();
+      const offsetToMonday = (dayOfWeek + 6) % 7;
+      const periodFromDate = new Date(parsed);
+      periodFromDate.setUTCDate(parsed.getUTCDate() - offsetToMonday);
+      const periodToDate = new Date(periodFromDate);
+      periodToDate.setUTCDate(periodFromDate.getUTCDate() + 6);
+
+      const periodFrom = periodFromDate.toISOString().slice(0, 10);
+      const periodTo = periodToDate.toISOString().slice(0, 10);
+      return { key: periodFrom, period_from: periodFrom, period_to: periodTo };
+    }
+
+    const year = parsed.getUTCFullYear();
+    const month = parsed.getUTCMonth();
+    const periodFromDate = new Date(Date.UTC(year, month, 1));
+    const periodToDate = new Date(Date.UTC(year, month + 1, 0));
+    const periodFrom = periodFromDate.toISOString().slice(0, 10);
+    const periodTo = periodToDate.toISOString().slice(0, 10);
+    return { key: periodFrom.slice(0, 7), period_from: periodFrom, period_to: periodTo };
   }
 }
