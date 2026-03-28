@@ -1,7 +1,9 @@
-import { Body, Controller, HttpCode, HttpStatus, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, Req } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface';
-import { LedgerService } from './ledger.service';
+import { PERMISSIONS } from '../auth/permissions';
+import { RequirePermissions } from '../auth/permissions.decorator';
+import { LedgerReadQueryDto } from './dto/ledger-read-query.dto';
 import { CreateReversalEntryDto } from './dto/create-reversal-entry.dto';
 import { CreateAdjustmentEntryDto, CreateManualJournalEntryDto } from './dto/manual-journal-entry.dto';
 import { PostJournalDto } from './dto/post-journal.dto';
@@ -10,6 +12,46 @@ import { LedgerService } from './ledger.service';
 @Controller('api/v1/ledger')
 export class LedgerController {
   constructor(private readonly ledgerService: LedgerService) {}
+
+  @Get('accounts')
+  @RequirePermissions(PERMISSIONS.VIEW_REPORTS)
+  listAccounts(@Req() req: AuthenticatedRequest, @Query() query: LedgerReadQueryDto) {
+    const result = this.ledgerService.listAccounts(req.auth!.tenant_id, this.toServiceFilters(query), query);
+    return {
+      data: result.data,
+      meta: { request_id: randomUUID(), ...result.meta },
+      error: null
+    };
+  }
+
+  @Get('entries')
+  @RequirePermissions(PERMISSIONS.VIEW_REPORTS)
+  listEntries(@Req() req: AuthenticatedRequest, @Query() query: LedgerReadQueryDto) {
+    const result = this.ledgerService.listEntries(req.auth!.tenant_id, this.toServiceFilters(query), query);
+    return {
+      data: result.data,
+      meta: { request_id: randomUUID(), ...result.meta },
+      error: null
+    };
+  }
+
+  @Get('account/:id/entries')
+  @RequirePermissions(PERMISSIONS.VIEW_REPORTS)
+  listEntriesByAccount(@Req() req: AuthenticatedRequest, @Param('id') accountCode: string, @Query() query: LedgerReadQueryDto) {
+    const result = this.ledgerService.listAccountEntries(req.auth!.tenant_id, accountCode, this.toServiceFilters(query), query);
+    return {
+      data: result.data,
+      meta: { request_id: randomUUID(), ...result.meta },
+      error: null
+    };
+  }
+
+  private toServiceFilters(query: LedgerReadQueryDto): LedgerReadQueryDto {
+    return {
+      ...query,
+      account_code: query.account_code ?? query.account
+    };
+  }
 
   @Post('postings')
   @RequirePermissions(PERMISSIONS.POST_JOURNAL_ENTRIES)

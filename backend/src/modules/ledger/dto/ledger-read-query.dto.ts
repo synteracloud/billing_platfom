@@ -1,8 +1,10 @@
 export interface LedgerReadQueryDto {
+  tenant_id?: string;
   date_from?: string;
   date_to?: string;
+  account?: string;
   account_code?: string;
   reference?: string;
-  cursor?: string;
-  limit?: number;
+  page?: string;
+  page_size?: string;
 }

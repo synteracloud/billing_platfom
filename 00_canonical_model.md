@@ -10,22 +10,23 @@ Provide one canonical vocabulary and data model used consistently by all engines
 2. `invoice_line`
 3. `payment`
 4. `payment_allocation`
-5. `bill` (AP source document)
+5. `vendor` (AP counterparty)
+6. `bill` (AP source document)
 
 ### Accounting Entities (Ledger SoT)
-6. `ledger_account`
-7. `journal_entry`
-8. `journal_line`
+7. `ledger_account`
+8. `journal_entry`
+9. `journal_line`
 
 ### Integration Entities
-9. `normalized_record`
-10. `reconciliation_run`
-11. `reconciliation_result`
+10. `normalized_record`
+11. `reconciliation_run`
+12. `reconciliation_result`
 
 ### Derived Entities (Never SoT)
-12. `receivable_position`
-13. `payable_position`
-14. `analytics_fact`
+13. `receivable_position`
+14. `payable_position`
+15. `analytics_fact`
 
 ## Global Naming Rules
 - Persisted fields: `snake_case`.
@@ -55,6 +56,7 @@ Provide one canonical vocabulary and data model used consistently by all engines
 5. Integration records cannot mutate canonical entities directly.
 
 ## Relationship Model
+- `vendor 1..n bill`
 - `invoice 1..n invoice_line`
 - `payment 1..n payment_allocation`
 - `payment_allocation n..1 invoice`

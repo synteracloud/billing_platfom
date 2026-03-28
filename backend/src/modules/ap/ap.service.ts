@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventsService } from '../events/events.service';
 import { LedgerRepository } from '../ledger/ledger.repository';
 import { ApRepository, PayableBillPosition, VendorPayableState } from './ap.repository';
@@ -86,6 +86,10 @@ export class ApService {
     correlationId: string | null,
     eventId: string
   ): void {
+    if (!payload.vendor_id?.trim()) {
+      throw new BadRequestException('vendor_id is required for AP bill flows');
+    }
+
     if (!this.apRepository.markEventApplied(tenantId, 'bill-approved', eventId)) {
       return;
     }
