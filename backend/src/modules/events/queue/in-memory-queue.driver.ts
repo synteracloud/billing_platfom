@@ -8,11 +8,21 @@ type PendingJob = {
   attemptsMade: number;
 };
 
+export type DeadLetterJob = {
+  jobId: string;
+  name: string;
+  data: QueueEnvelope;
+  attemptsMade: number;
+  failedAt: string;
+  reason: string;
+};
+
 @Injectable()
 export class InMemoryQueueDriver implements QueueDriver, OnModuleDestroy {
   private readonly logger = new Logger(InMemoryQueueDriver.name);
   private readonly jobs = new Map<string, PendingJob>();
   private readonly aggregateChains = new Map<string, Promise<void>>();
+  private readonly deadLetterJobs: DeadLetterJob[] = [];
   private processor: ((job: QueueJob) => Promise<void>) | null = null;
   private isClosed = false;
 
@@ -33,6 +43,9 @@ export class InMemoryQueueDriver implements QueueDriver, OnModuleDestroy {
 
   async registerProcessor(handler: (job: QueueJob) => Promise<void>): Promise<void> {
     this.processor = handler;
+    for (const jobId of this.jobs.keys()) {
+      this.schedule(jobId, 0);
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -46,6 +59,13 @@ export class InMemoryQueueDriver implements QueueDriver, OnModuleDestroy {
     this.jobs.clear();
   }
 
+  getDeadLetterJobs(): DeadLetterJob[] {
+    return this.deadLetterJobs.map((job) => ({
+      ...job,
+      data: JSON.parse(JSON.stringify(job.data))
+    }));
+  }
+
   private schedule(jobId: string, delayMs: number): void {
     setTimeout(() => {
       void this.process(jobId);
@@ -54,7 +74,12 @@ export class InMemoryQueueDriver implements QueueDriver, OnModuleDestroy {
 
   private async process(jobId: string): Promise<void> {
     const pending = this.jobs.get(jobId);
-    if (!pending || !this.processor || this.isClosed) {
+    if (!pending || this.isClosed) {
+      return;
+    }
+
+    if (!this.processor) {
+      this.schedule(jobId, 10);
       return;
     }
 
@@ -82,6 +107,14 @@ export class InMemoryQueueDriver implements QueueDriver, OnModuleDestroy {
         } catch (error) {
           if (latest.attemptsMade >= latest.options.attempts) {
             this.logger.error(`Dead-lettering event ${latest.data.event_id}: ${(error as Error).message}`);
+            this.deadLetterJobs.push({
+              jobId,
+              name: latest.name,
+              data: JSON.parse(JSON.stringify(latest.data)),
+              attemptsMade: latest.attemptsMade,
+              failedAt: new Date().toISOString(),
+              reason: (error as Error).message
+            });
             this.jobs.delete(jobId);
             return;
           }
