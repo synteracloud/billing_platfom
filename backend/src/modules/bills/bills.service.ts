@@ -4,15 +4,17 @@ import { UpdateBillDto } from './dto/update-bill.dto';
 import { BillEntity } from './entities/bill.entity';
 import { BillsRepository } from './bills.repository';
 import { VendorsRepository } from '../vendors/vendors.repository';
+import { EventsService } from '../events/events.service';
 
 @Injectable()
 export class BillsService {
   constructor(
     private readonly billsRepository: BillsRepository,
-    private readonly vendorsRepository: VendorsRepository
+    private readonly vendorsRepository: VendorsRepository,
+    private readonly eventsService: EventsService
   ) {}
 
-  createBill(tenantId: string, data: CreateBillDto): BillEntity {
+  createBill(tenantId: string, data: CreateBillDto, actorId = 'system', idempotencyKey?: string): BillEntity {
     this.validateVendor(data.vendor_id);
     this.validateCurrency(data.currency_code);
     this.validateAmount(data.total_amount_minor);
@@ -23,7 +25,7 @@ export class BillsService {
       throw new BadRequestException('vendor_id must reference an existing vendor in tenant scope');
     }
 
-    return this.billsRepository.create({
+    const created = this.billsRepository.create({
       tenant_id: tenantId,
       vendor_id: data.vendor_id,
       total_amount_minor: data.total_amount_minor,
@@ -33,6 +35,21 @@ export class BillsService {
       due_at: data.due_at ?? null,
       metadata: data.metadata ?? null
     });
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'bill',
+      entity_id: created.id,
+      action: 'created',
+      actor_type: 'user',
+      actor_id: actorId,
+      aggregate_version: 1,
+      correlation_id: created.id,
+      idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:bill:create` : undefined,
+      payload: { after: created }
+    });
+
+    return created;
   }
 
   getBill(tenantId: string, billId: string): BillEntity {
@@ -61,7 +78,7 @@ export class BillsService {
     return this.billsRepository.listByVendor(tenantId, vendorId);
   }
 
-  updateBill(tenantId: string, billId: string, data: UpdateBillDto): BillEntity {
+  updateBill(tenantId: string, billId: string, data: UpdateBillDto, actorId = 'system', idempotencyKey?: string): BillEntity {
     if (data.currency_code !== undefined) {
       this.validateCurrency(data.currency_code);
     }
@@ -82,14 +99,41 @@ export class BillsService {
       throw new NotFoundException('Bill not found');
     }
 
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'bill',
+      entity_id: updated.id,
+      action: 'updated',
+      actor_type: 'user',
+      actor_id: actorId,
+      aggregate_version: 2,
+      correlation_id: updated.id,
+      idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:bill:update` : undefined,
+      payload: { before: existing, after: updated }
+    });
+
     return updated;
   }
 
-  deleteBill(tenantId: string, billId: string): void {
+  deleteBill(tenantId: string, billId: string, actorId = 'system', idempotencyKey?: string): void {
+    const existing = this.getBill(tenantId, billId);
     const deleted = this.billsRepository.softDelete(tenantId, billId);
     if (!deleted) {
       throw new NotFoundException('Bill not found');
     }
+
+    this.eventsService.logMutation({
+      tenant_id: tenantId,
+      entity_type: 'bill',
+      entity_id: billId,
+      action: 'deleted',
+      actor_type: 'user',
+      actor_id: actorId,
+      aggregate_version: 3,
+      correlation_id: billId,
+      idempotency_key: idempotencyKey ? `${idempotencyKey}:audit:bill:delete` : undefined,
+      payload: { before: existing, after: null }
+    });
   }
 
   private validateVendor(vendorId: string | undefined): void {
