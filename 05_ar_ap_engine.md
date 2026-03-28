@@ -27,7 +27,7 @@ AR/AP does **not** authoritatively own invoices, payments, bills, or journals.
 - Aging buckets computed deterministically from due date and as-of date.
 
 ## Payables Derivation
-- Start from approved bills.
+- Start from approved bills linked to first-class vendors.
 - Reduce exposure by bill payments/disbursements.
 - Aging and vendor balance rules mirror receivables with payable semantics.
 
